@@ -7,6 +7,8 @@
 #include <cstdint>
 
 class QLabel;
+class QCheckBox;
+class QComboBox;
 class QDoubleSpinBox;
 class QGroupBox;
 class QProgressBar;
@@ -33,6 +35,7 @@ private:
     void showNodeContextMenu(const QPoint &pos);
     void syncVolumeMaterialInspector();
     void applyVolumeMaterialInspector();
+    void applyVolumePlaybackInspector();
 
     QTreeWidget *m_nodeList = nullptr;
     QProgressBar *m_importProgress = nullptr;
@@ -47,6 +50,11 @@ private:
     QDoubleSpinBox *m_volumeEmission = nullptr;
     QDoubleSpinBox *m_volumeLightingStrength = nullptr;
     QLabel *m_volumeLightStats = nullptr;
+    QLabel *m_volumeSequenceStats = nullptr;
+    QComboBox *m_volumePlaybackMode = nullptr;
+    QDoubleSpinBox *m_volumePlaybackFps = nullptr;
+    QCheckBox *m_volumePlaybackLoop = nullptr;
+    QSpinBox *m_volumeFrameOffset = nullptr;
     QDoubleSpinBox *m_volumeTemperatureLow = nullptr;
     QDoubleSpinBox *m_volumeTemperatureHigh = nullptr;
     QDoubleSpinBox *m_volumeTemperatureGamma = nullptr;

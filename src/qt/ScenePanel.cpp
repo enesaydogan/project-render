@@ -8,6 +8,8 @@
 #include <QAction>
 #include <QColor>
 #include <QColorDialog>
+#include <QCheckBox>
+#include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QFileInfo>
 #include <QFormLayout>
@@ -288,6 +290,9 @@ ScenePanel::ScenePanel(QWidget *parent)
                                    (m_importProgress && m_importProgress->isVisible());
         if (refreshNeeded) {
             refreshSceneList();
+        } else if (m_volumeMaterialGroup &&
+                   m_volumeMaterialGroup->isVisible()) {
+            syncVolumeMaterialInspector();
         }
     });
     m_refreshTimer->start(200);
@@ -390,6 +395,41 @@ void ScenePanel::createUi()
     m_volumeLightStats = new QLabel(m_volumeMaterialGroup);
     m_volumeLightStats->setWordWrap(true);
     volumeForm->addRow(tr("DXR light proxies"), m_volumeLightStats);
+    m_volumeSequenceStats = new QLabel(m_volumeMaterialGroup);
+    m_volumePlaybackMode = new QComboBox(m_volumeMaterialGroup);
+    m_volumePlaybackMode->addItem(tr("Static"));
+    m_volumePlaybackMode->addItem(tr("Animation Timeline"));
+    m_volumePlaybackMode->addItem(tr("Scene Loop"));
+    m_volumePlaybackFps = new QDoubleSpinBox(m_volumeMaterialGroup);
+    m_volumePlaybackFps->setRange(0.1, 240.0);
+    m_volumePlaybackFps->setSingleStep(1.0);
+    m_volumePlaybackFps->setDecimals(2);
+    volumeForm->addRow(tr("Playback FPS"), m_volumePlaybackFps);
+    m_volumePlaybackLoop = new QCheckBox(tr("Loop sequence"),
+                                        m_volumeMaterialGroup);
+    m_volumeFrameOffset = new QSpinBox(m_volumeMaterialGroup);
+    m_volumeFrameOffset->setRange(-100000, 100000);
+    volumeForm->addRow(tr("VDB sequence"), m_volumeSequenceStats);
+    volumeForm->addRow(tr("Playback"), m_volumePlaybackMode);
+    volumeForm->addRow(QString(), m_volumePlaybackLoop);
+    volumeForm->addRow(tr("Frame offset"), m_volumeFrameOffset);
+    connect(m_volumePlaybackMode,
+            qOverload<int>(&QComboBox::currentIndexChanged), this,
+            [this](int) {
+                if (!m_syncing) applyVolumePlaybackInspector();
+            });
+    connect(m_volumePlaybackFps,
+            qOverload<double>(&QDoubleSpinBox::valueChanged), this,
+            [this](double) {
+                if (!m_syncing) applyVolumePlaybackInspector();
+            });
+    connect(m_volumePlaybackLoop, &QCheckBox::toggled, this, [this](bool) {
+        if (!m_syncing) applyVolumePlaybackInspector();
+    });
+    connect(m_volumeFrameOffset, qOverload<int>(&QSpinBox::valueChanged),
+            this, [this](int) {
+                if (!m_syncing) applyVolumePlaybackInspector();
+            });
     m_volumeTemperatureLow =
         makeFloat(tr("Heat low"), 0.0, 0.999, 0.01, 3);
     m_volumeTemperatureHigh =
@@ -538,6 +578,7 @@ void ScenePanel::syncVolumeMaterialInspector()
     m_syncing = true;
     const Scene::VolumeMaterial &m =
         nodes[static_cast<size_t>(nodeIndex)].volumeMaterial;
+    const Scene::Node &node = nodes[static_cast<size_t>(nodeIndex)];
     m_volumeDensity->setValue(m.densityScale);
     m_volumeAbsorption->setValue(m.absorption);
     m_volumeScattering->setValue(m.scattering);
@@ -552,6 +593,28 @@ void ScenePanel::syncVolumeMaterialInspector()
             .arg(lightStats.lightCount)
             .arg(lightStats.totalIntensity, 0, 'g', 4)
             .arg(lightStats.maxIntensity, 0, 'g', 4));
+    assetlib::AssetId volumeId;
+    VolumetricRenderer::SequenceInfo sequence;
+    if (assetlib::AssetId::FromString(node.volumeAssetId, volumeId))
+        sequence = VolumetricRenderer::GetSequenceInfo(volumeId);
+    m_volumeSequenceStats->setText(
+        sequence.animated
+            ? tr("%1 frames, resident %2%3")
+                  .arg(sequence.frameCount)
+                  .arg(sequence.currentFrame)
+                  .arg(sequence.loading
+                           ? tr(", loading %1").arg(sequence.pendingFrame)
+                           : QString())
+            : tr("Single frame"));
+    m_volumePlaybackMode->setCurrentIndex(
+        static_cast<int>(node.volumePlayback.mode));
+    m_volumePlaybackFps->setValue(node.volumePlayback.fps);
+    m_volumePlaybackLoop->setChecked(node.volumePlayback.loop);
+    m_volumeFrameOffset->setValue(node.volumePlayback.frameOffset);
+    m_volumePlaybackMode->setEnabled(sequence.animated);
+    m_volumePlaybackFps->setEnabled(sequence.animated);
+    m_volumePlaybackLoop->setEnabled(sequence.animated);
+    m_volumeFrameOffset->setEnabled(sequence.animated);
     m_volumeTemperatureLow->setValue(m.temperatureLow);
     m_volumeTemperatureHigh->setValue(m.temperatureHigh);
     m_volumeTemperatureGamma->setValue(m.temperatureGamma);
@@ -604,6 +667,24 @@ void ScenePanel::applyVolumeMaterialInspector()
     material.emissionColor[1] = static_cast<float>(emission.greenF());
     material.emissionColor[2] = static_cast<float>(emission.blueF());
     Scene::SetVolumeNodeMaterial(static_cast<size_t>(nodeIndex), material);
+}
+
+void ScenePanel::applyVolumePlaybackInspector()
+{
+    const int nodeIndex = selectedNodeIndex();
+    const auto &nodes = Scene::GetNodes();
+    if (nodeIndex < 0 || static_cast<size_t>(nodeIndex) >= nodes.size() ||
+        nodes[static_cast<size_t>(nodeIndex)].volumeAssetId.empty()) {
+        return;
+    }
+    Scene::VolumePlaybackSettings playback =
+        nodes[static_cast<size_t>(nodeIndex)].volumePlayback;
+    playback.mode = static_cast<Scene::VolumePlaybackMode>(
+        m_volumePlaybackMode->currentIndex());
+    playback.fps = static_cast<float>(m_volumePlaybackFps->value());
+    playback.loop = m_volumePlaybackLoop->isChecked();
+    playback.frameOffset = m_volumeFrameOffset->value();
+    Scene::SetVolumeNodePlayback(static_cast<size_t>(nodeIndex), playback);
 }
 
 int ScenePanel::selectedNodeIndex() const

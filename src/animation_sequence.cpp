@@ -1,4 +1,5 @@
 #include "animation_sequence.h"
+#include "scene.h"
 
 #include <algorithm>
 #include <cmath>
@@ -332,6 +333,7 @@ bool ApplyAtTime(float seconds) {
   if (g_keyframes.empty()) {
     return false;
   }
+  Scene::SetVolumeTimelineTime(seconds);
   return SavedViews::ApplyView(EvaluateAtTime(seconds));
 }
 
@@ -339,6 +341,9 @@ bool ApplyAtFrame(int frameIndex, int fps) {
   if (g_keyframes.empty()) {
     return false;
   }
+  Scene::SetVolumeTimelineTime(
+      static_cast<float>((std::max)(frameIndex, 0)) /
+      static_cast<float>((std::max)(fps, 1)));
   return SavedViews::ApplyView(EvaluateAtFrame(frameIndex, fps));
 }
 

@@ -855,6 +855,10 @@ static json BuildMetadata(const std::vector<int> &textureSaveRemap,
           {"ms", vm.marchSteps},
           {"ls", vm.lightSteps},
       };
+      savedNode["vpm"] = static_cast<int>(node.volumePlayback.mode);
+      savedNode["vpf"] = node.volumePlayback.fps;
+      savedNode["vpl"] = node.volumePlayback.loop;
+      savedNode["vpo"] = node.volumePlayback.frameOffset;
     }
     j["nod"].push_back(std::move(savedNode));
   }
@@ -1554,6 +1558,12 @@ static void RestoreNodesPRS(const json &j, bool hasEmbedded) {
             node.volumeMaterial.emissionColor[i] = vm["ec"][i];
         }
       }
+      node.volumePlayback.mode = static_cast<Scene::VolumePlaybackMode>(
+          (std::clamp)(n.value("vpm", 0), 0, 2));
+      node.volumePlayback.fps =
+          (std::clamp)(n.value("vpf", 30.0f), 0.1f, 240.0f);
+      node.volumePlayback.loop = n.value("vpl", true);
+      node.volumePlayback.frameOffset = n.value("vpo", 0);
       node.selected = n.value("s", false);
       const_cast<std::vector<Scene::Node>&>(Scene::GetNodes()).push_back(node);
       continue;

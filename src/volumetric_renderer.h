@@ -28,6 +28,15 @@ struct EmissionLightStats {
   float maxIntensity = 0.0f;
 };
 
+struct SequenceInfo {
+  bool animated = false;
+  uint32_t frameCount = 1;
+  uint32_t currentFrame = 0;
+  uint32_t pendingFrame = 0;
+  bool loading = false;
+  float sourceFps = 30.0f;
+};
+
 // Resolve + cache a Volume asset. Rendering walks all visible scene volume nodes.
 bool SetActiveVolume(const assetlib::AssetId &id);
 void ClearActiveVolume();
@@ -40,6 +49,10 @@ Params &GetParams();
 // emissive volume nodes. These participate in DXR/ReSTIR and raster lighting.
 void AppendEmissionLights(std::vector<Light> &lights);
 EmissionLightStats GetEmissionLightStats();
+SequenceInfo GetSequenceInfo(const assetlib::AssetId &id);
+// Requests a zero-based sequence frame and applies a completed asynchronous
+// load. Returns true only when the resident volume frame changed.
+bool UpdateSequenceFrame(const assetlib::AssetId &id, uint32_t frameIndex);
 
 // --- Used by the raster renderer ---------------------------------------
 // Performs any pending GPU upload onto cmdList. Returns false if nothing is

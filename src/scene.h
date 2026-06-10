@@ -20,6 +20,19 @@ enum class RenderMode {
 
 namespace Scene {
 
+enum class VolumePlaybackMode : int {
+  Static = 0,
+  Timeline = 1,
+  SceneLoop = 2,
+};
+
+struct VolumePlaybackSettings {
+  VolumePlaybackMode mode = VolumePlaybackMode::Static;
+  float fps = 30.0f;
+  bool loop = true;
+  int frameOffset = 0;
+};
+
 struct VolumeMaterial {
   float densityScale = 1.0f;
   float absorption = 1.0f;
@@ -49,6 +62,8 @@ struct Node {
   std::string volumeAssetId;       // non-empty => this node is a volumetric asset
   std::vector<uint8_t> volumePayload; // embedded cooked payload for portable scenes
   VolumeMaterial volumeMaterial;
+  VolumePlaybackSettings volumePlayback;
+  float volumePlaybackSeconds = 0.0f; // runtime only
   std::vector<int> linkedMaterialIndices; // global material indices per import slot
   std::vector<std::string> linkedMaterialSourceNames; // original imported names per slot
   bool selected = false;
@@ -129,6 +144,10 @@ bool FindVolumeNodeTransform(const assetlib::AssetId &id, float out[16]);
 bool FindVolumeNodeMaterial(const assetlib::AssetId &id,
                             VolumeMaterial &out);
 bool SetVolumeNodeMaterial(size_t nodeIndex, const VolumeMaterial &material);
+bool SetVolumeNodePlayback(size_t nodeIndex,
+                           const VolumePlaybackSettings &settings);
+void SetVolumeTimelineTime(float seconds);
+void TickVolumeAnimations(float deltaSeconds);
 
 // Extract a self-contained Model asset directly from a set of global scene
 // meshes (with the meshes' materials and textures), baking the supplied

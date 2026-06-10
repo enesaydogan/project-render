@@ -47,6 +47,11 @@ public:
   std::filesystem::path cookedVolumePath(const AssetId &id) const {
     return cacheDir() / "Volumes" / (id.ToString() + ".prvol");
   }
+  std::filesystem::path cookedVolumeFramePath(const AssetId &id,
+                                              uint32_t frame) const {
+    return cacheDir() / "Volumes" /
+           (id.ToString() + "_" + std::to_string(frame) + ".prvol");
+  }
 
   // Creates the full directory tree if missing. Returns false on filesystem
   // error (e.g. unwritable location).

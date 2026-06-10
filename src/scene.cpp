@@ -3703,6 +3703,10 @@ size_t AddVolumeNode(const assetlib::AssetId &id) {
   const assetlib::AssetMetadata *meta = reg ? reg->Get(id) : nullptr;
   node.name = meta && !meta->displayName.empty() ? meta->displayName : "Volume";
   node.volumeAssetId = id.ToString();
+  const VolumetricRenderer::SequenceInfo sequence =
+      VolumetricRenderer::GetSequenceInfo(id);
+  if (sequence.animated)
+    node.volumePlayback.fps = sequence.sourceFps;
   // Column-major diagonal scale + translation. Rest the volume ON the ground
   // (bottom at Y=0), centered in X/Z. Centering on the origin would bury the
   // lower half below the ground plane, where the scene-depth clip hides it —
@@ -3758,6 +3762,74 @@ bool SetVolumeNodeMaterial(size_t nodeIndex, const VolumeMaterial &material) {
   DxrRenderer::ResetAccumulation();
   NotifySceneChanged();
   return true;
+}
+
+bool SetVolumeNodePlayback(size_t nodeIndex,
+                           const VolumePlaybackSettings &settings) {
+  if (nodeIndex >= s_nodes.size() ||
+      s_nodes[nodeIndex].volumeAssetId.empty()) {
+    return false;
+  }
+  VolumePlaybackSettings sanitized = settings;
+  sanitized.fps = (std::clamp)(sanitized.fps, 0.1f, 240.0f);
+  s_nodes[nodeIndex].volumePlayback = sanitized;
+  s_nodes[nodeIndex].volumePlaybackSeconds = 0.0f;
+  DxrRenderer::ResetAccumulation();
+  NotifySceneChanged();
+  return true;
+}
+
+namespace {
+float s_volumeTimelineSeconds = 0.0f;
+}
+
+void SetVolumeTimelineTime(float seconds) {
+  s_volumeTimelineSeconds = (std::max)(seconds, 0.0f);
+}
+
+void TickVolumeAnimations(float deltaSeconds) {
+  bool frameChanged = false;
+  for (Node &node : s_nodes) {
+    if (!node.visible || node.volumeAssetId.empty())
+      continue;
+    assetlib::AssetId id;
+    if (!assetlib::AssetId::FromString(node.volumeAssetId, id))
+      continue;
+    const VolumetricRenderer::SequenceInfo sequence =
+        VolumetricRenderer::GetSequenceInfo(id);
+    if (!sequence.animated || sequence.frameCount < 2)
+      continue;
+
+    float seconds = 0.0f;
+    switch (node.volumePlayback.mode) {
+    case VolumePlaybackMode::Timeline:
+      seconds = s_volumeTimelineSeconds;
+      break;
+    case VolumePlaybackMode::SceneLoop:
+      node.volumePlaybackSeconds += (std::max)(deltaSeconds, 0.0f);
+      seconds = node.volumePlaybackSeconds;
+      break;
+    case VolumePlaybackMode::Static:
+    default:
+      break;
+    }
+
+    int64_t frame = static_cast<int64_t>(
+                        std::floor(seconds * node.volumePlayback.fps)) +
+                    node.volumePlayback.frameOffset;
+    const int64_t count = static_cast<int64_t>(sequence.frameCount);
+    if (node.volumePlayback.loop) {
+      frame = ((frame % count) + count) % count;
+    } else {
+      frame = (std::clamp)(frame, int64_t{0}, count - 1);
+    }
+    frameChanged |= VolumetricRenderer::UpdateSequenceFrame(
+        id, static_cast<uint32_t>(frame));
+  }
+  if (frameChanged) {
+    UpdateLights();
+    DxrRenderer::ResetAccumulation();
+  }
 }
 
 bool ImportModel(const std::string &utf8path, const float *rootTranslation) {

@@ -4113,6 +4113,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     // Scene::GetInstances(). Tick here so the flag is set before the
     // next AS pass.
     Scene::TickScatterCameraInvalidation();
+    Scene::TickVolumeAnimations(dt);
 
     if (!g_renderExportJob.active && g_currentRenderMode == RenderMode::DXR) {
       EnsureInteractiveDxrPipelineSize(previewWidth, previewHeight,

@@ -333,7 +333,11 @@ bool RecookVolumeFromSource(AssetRegistry &registry, const AssetPaths &paths,
   updated.sourceTimestamp = FileTimestamp(meta->sourcePath);
   if (ok) {
     updated.cookedPayloadHash = HashBytes(blob.data(), blob.size());
-    json stats;
+    json stats = json::object();
+    try {
+      stats = json::parse(meta->importSettingsJson);
+    } catch (...) {
+    }
     stats["dim"] = {cooked.dim[0], cooked.dim[1], cooked.dim[2]};
     stats["activeVoxels"] = cooked.activeVoxels;
     stats["bricks"] = cooked.bricks.size();

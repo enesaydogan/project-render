@@ -4,6 +4,7 @@
 #include "asset_library/asset_cooker.h"
 #include "asset_library/global_registry.h"
 #include "asset_library/pack_mounts.h"
+#include "asset_library/vdb_import.h"
 #include "camera.h"
 #include "d3d12_helpers.h"
 #include "dxc_wrapper.h"
@@ -12,22 +13,46 @@
 #include <DirectXPackedVector.h>
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
+#include <future>
+#include <iomanip>
 #include <limits>
 #include <new>
+#include <nlohmann/json.hpp>
 #include <string>
+#include <sstream>
 #include <unordered_map>
 #include <vector>
 
 using Microsoft::WRL::ComPtr;
+using json = nlohmann::json;
 
 namespace VolumetricRenderer {
 namespace {
 
 Params s_params;
 EmissionLightStats s_emissionLightStats;
+
+struct CpuVolumeFrame {
+  std::vector<float> density;
+  std::vector<float> temperature;
+  uint32_t dim[3] = {0, 0, 0};
+  float temperatureMin = 0.0f;
+  float temperatureInvRange = 0.0f;
+  DirectX::XMFLOAT3 boundsMin{0, 0, 0};
+  DirectX::XMFLOAT3 boundsMax{0, 0, 0};
+};
+
+struct RetiredVolumeGpuFrame {
+  ComPtr<ID3D12Resource> texture;
+  ComPtr<ID3D12Resource> uploadBuffer;
+  ComPtr<ID3D12DescriptorHeap> descriptorHeap;
+  uint32_t age = 0;
+};
 
 struct RuntimeVolume {
   assetlib::AssetId id;
@@ -43,6 +68,21 @@ struct RuntimeVolume {
   ComPtr<ID3D12Resource> texture;
   ComPtr<ID3D12Resource> uploadBuffer;
   ComPtr<ID3D12DescriptorHeap> descriptorHeap;
+  std::vector<RetiredVolumeGpuFrame> retiredGpuFrames;
+  bool sequence = false;
+  std::string sequenceDirectory;
+  std::string sequencePrefix;
+  std::string sequenceSuffix = ".vdb";
+  std::string sequenceDensityGrid;
+  std::string sequenceTemperatureGrid;
+  uint32_t sequenceFirstFrame = 0;
+  uint32_t sequenceFrameCount = 1;
+  uint32_t sequencePadding = 0;
+  float sequenceFps = 30.0f;
+  uint32_t currentFrame = 0;
+  uint32_t requestedFrame = 0;
+  uint32_t pendingFrame = 0;
+  std::future<std::pair<bool, CpuVolumeFrame>> pendingLoad;
 };
 
 std::unordered_map<std::string, RuntimeVolume> s_volumes;
@@ -362,6 +402,51 @@ bool BuildDenseField(const assetlib::CookedVolume &vol, RuntimeVolume &runtime) 
   return true;
 }
 
+CpuVolumeFrame TakeCpuFrame(RuntimeVolume &runtime) {
+  CpuVolumeFrame frame;
+  frame.density = std::move(runtime.density);
+  frame.temperature = std::move(runtime.temperature);
+  std::copy(std::begin(runtime.dim), std::end(runtime.dim),
+            std::begin(frame.dim));
+  frame.temperatureMin = runtime.temperatureMin;
+  frame.temperatureInvRange = runtime.temperatureInvRange;
+  frame.boundsMin = runtime.boundsMin;
+  frame.boundsMax = runtime.boundsMax;
+  return frame;
+}
+
+void ApplyCpuFrame(RuntimeVolume &runtime, CpuVolumeFrame frame,
+                   uint32_t frameIndex) {
+  runtime.density = std::move(frame.density);
+  runtime.temperature = std::move(frame.temperature);
+  std::copy(std::begin(frame.dim), std::end(frame.dim),
+            std::begin(runtime.dim));
+  runtime.temperatureMin = frame.temperatureMin;
+  runtime.temperatureInvRange = frame.temperatureInvRange;
+  runtime.boundsMin = frame.boundsMin;
+  runtime.boundsMax = frame.boundsMax;
+  runtime.currentFrame = frameIndex;
+  if (runtime.texture || runtime.uploadBuffer || runtime.descriptorHeap) {
+    RetiredVolumeGpuFrame retired;
+    retired.texture = std::move(runtime.texture);
+    retired.uploadBuffer = std::move(runtime.uploadBuffer);
+    retired.descriptorHeap = std::move(runtime.descriptorHeap);
+    runtime.retiredGpuFrames.push_back(std::move(retired));
+  }
+  runtime.needsUpload = true;
+  runtime.uploadFailed = false;
+}
+
+std::filesystem::path SequenceSourcePath(const RuntimeVolume &runtime,
+                                         uint32_t frameIndex) {
+  std::ostringstream number;
+  number << std::setw(static_cast<int>(runtime.sequencePadding))
+         << std::setfill('0')
+         << (runtime.sequenceFirstFrame + frameIndex);
+  return std::filesystem::path(runtime.sequenceDirectory) /
+         (runtime.sequencePrefix + number.str() + runtime.sequenceSuffix);
+}
+
 RuntimeVolume *ResolveVolume(const assetlib::AssetId &id) {
   if (!id.valid())
     return nullptr;
@@ -397,6 +482,35 @@ RuntimeVolume *ResolveVolume(const assetlib::AssetId &id) {
   runtime.id = id;
   if (!BuildDenseField(cooked, runtime))
     return nullptr;
+  if (reg) {
+    if (const assetlib::AssetMetadata *metadata = reg->Get(id)) {
+      try {
+        const json settings = json::parse(metadata->importSettingsJson);
+        if (settings.contains("sequence") &&
+            settings["sequence"].is_object()) {
+          const json &sequence = settings["sequence"];
+          runtime.sequenceFrameCount =
+              sequence.value("frameCount", 1u);
+          runtime.sequence = runtime.sequenceFrameCount > 1;
+          runtime.sequenceDirectory =
+              sequence.value("directory", std::string());
+          runtime.sequencePrefix =
+              sequence.value("prefix", std::string());
+          runtime.sequenceSuffix =
+              sequence.value("suffix", std::string(".vdb"));
+          runtime.sequenceDensityGrid =
+              settings.value("densityGrid", std::string());
+          runtime.sequenceTemperatureGrid =
+              settings.value("temperatureGrid", std::string());
+          runtime.sequenceFirstFrame =
+              sequence.value("firstFrame", 0u);
+          runtime.sequencePadding = sequence.value("padding", 0u);
+          runtime.sequenceFps = sequence.value("fps", 30.0f);
+        }
+      } catch (...) {
+      }
+    }
+  }
   runtime.needsUpload = true;
   auto [it, inserted] = s_volumes.emplace(key, std::move(runtime));
   return inserted ? &it->second : nullptr;
@@ -544,6 +658,93 @@ bool HasActiveVolume() {
 }
 const assetlib::AssetId &ActiveVolumeId() { return s_lastResolvedId; }
 Params &GetParams() { return s_params; }
+
+SequenceInfo GetSequenceInfo(const assetlib::AssetId &id) {
+  SequenceInfo info;
+  RuntimeVolume *volume = ResolveVolume(id);
+  if (!volume)
+    return info;
+  info.animated = volume->sequence;
+  info.frameCount = volume->sequenceFrameCount;
+  info.currentFrame = volume->currentFrame;
+  info.pendingFrame = volume->pendingFrame;
+  info.loading = volume->pendingLoad.valid();
+  info.sourceFps = volume->sequenceFps;
+  return info;
+}
+
+bool UpdateSequenceFrame(const assetlib::AssetId &id, uint32_t frameIndex) {
+  RuntimeVolume *volume = ResolveVolume(id);
+  if (!volume || !volume->sequence || volume->sequenceFrameCount < 2)
+    return false;
+
+  volume->requestedFrame =
+      (std::min)(frameIndex, volume->sequenceFrameCount - 1);
+  bool changed = false;
+  if (volume->pendingLoad.valid() &&
+      volume->pendingLoad.wait_for(std::chrono::seconds(0)) ==
+          std::future_status::ready) {
+    auto [loaded, frame] = volume->pendingLoad.get();
+    if (loaded) {
+      ApplyCpuFrame(*volume, std::move(frame), volume->pendingFrame);
+      changed = true;
+    } else {
+      fprintf(stderr, "VDB sequence frame %u failed to load for %s\n",
+              volume->pendingFrame, id.ToString().c_str());
+    }
+  }
+
+  if (!volume->pendingLoad.valid() &&
+      volume->requestedFrame != volume->currentFrame) {
+    const uint32_t requested = volume->requestedFrame;
+    const std::filesystem::path sourcePath =
+        SequenceSourcePath(*volume, requested);
+    assetlib::AssetRegistry *registry = assetlib::GlobalRegistry();
+    if (!registry)
+      return changed;
+    const std::filesystem::path cachePath =
+        registry->paths().cookedVolumeFramePath(id, requested);
+    const std::string densityGrid = volume->sequenceDensityGrid;
+    const std::string temperatureGrid = volume->sequenceTemperatureGrid;
+    volume->pendingFrame = requested;
+    volume->pendingLoad = std::async(
+        std::launch::async,
+        [sourcePath, cachePath, densityGrid, temperatureGrid]() {
+          assetlib::CookedVolume cooked;
+          std::vector<uint8_t> blob;
+          bool loaded =
+              assetlib::ReadCookedFile(cachePath, blob) &&
+              assetlib::DeserializeCookedVolume(blob.data(), blob.size(),
+                                                cooked);
+          if (!loaded) {
+            std::string error;
+            VdbImport::ImportOptions options;
+            options.densityGrid = densityGrid;
+            options.temperatureGrid = temperatureGrid;
+            loaded = VdbImport::ImportVdbToVolume(sourcePath.string(), options,
+                                                  cooked, &error);
+            if (loaded) {
+              blob.clear();
+              if (assetlib::SerializeCookedVolume(cooked, blob) &&
+                  !assetlib::WriteCookedFile(cachePath, blob)) {
+                fprintf(stderr,
+                        "VDB sequence cache write failed for '%s'; using the "
+                        "imported frame without caching\n",
+                        cachePath.string().c_str());
+              }
+            }
+            if (!loaded && !error.empty())
+              fprintf(stderr, "VDB sequence import failed for '%s': %s\n",
+                      sourcePath.string().c_str(), error.c_str());
+          }
+          RuntimeVolume temporary;
+          if (!loaded || !BuildDenseField(cooked, temporary))
+            return std::make_pair(false, CpuVolumeFrame{});
+          return std::make_pair(true, TakeCpuFrame(temporary));
+        });
+  }
+  return changed;
+}
 
 void AppendEmissionLights(std::vector<Light> &lights) {
   constexpr uint32_t kClustersPerAxis = 4;
@@ -763,6 +964,18 @@ bool Composite(ID3D12Device *device, ID3D12GraphicsCommandList *cmdList,
       });
 
   bool rendered = false;
+  for (auto &[key, volume] : s_volumes) {
+    (void)key;
+    for (RetiredVolumeGpuFrame &retired : volume.retiredGpuFrames)
+      ++retired.age;
+    volume.retiredGpuFrames.erase(
+        std::remove_if(volume.retiredGpuFrames.begin(),
+                       volume.retiredGpuFrames.end(),
+                       [](const RetiredVolumeGpuFrame &retired) {
+                         return retired.age > 4;
+                       }),
+        volume.retiredGpuFrames.end());
+  }
   for (const Scene::Node *nodePtr : visibleVolumes) {
     const Scene::Node &node = *nodePtr;
     assetlib::AssetId id;
