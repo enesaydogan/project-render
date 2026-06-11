@@ -247,7 +247,29 @@ static void WaitForQueueIdle(ID3D12CommandQueue *queue) {
   ThrowIfFailed(queue->Signal(fence.Get(), fenceValue));
   if (fence->GetCompletedValue() < fenceValue) {
     ThrowIfFailed(fence->SetEventOnCompletion(fenceValue, event));
-    WaitForSingleObject(event, INFINITE);
+    // Bounded waits instead of a single INFINITE: if the device is removed
+    // (TDR) the fence will never signal and an INFINITE wait would freeze the
+    // calling thread (e.g. the scene-load worker) forever with no diagnostic.
+    // While the device is healthy we keep waiting — the upload buffer being
+    // copied from must stay alive until the GPU is done.
+    for (;;) {
+      const DWORD waitResult = WaitForSingleObject(event, 10000);
+      if (waitResult != WAIT_TIMEOUT) {
+        break;
+      }
+      const HRESULT removedReason = s_device->GetDeviceRemovedReason();
+      if (removedReason != S_OK) {
+        fprintf(stderr,
+                "Asset upload: GPU device removed while waiting for upload "
+                "(reason 0x%08x); abandoning wait.\n",
+                (unsigned)removedReason);
+        break;
+      }
+      fprintf(stderr,
+              "Asset upload: still waiting on GPU after 10s (fence completed "
+              "%llu)\n",
+              (unsigned long long)fence->GetCompletedValue());
+    }
   }
   CloseHandle(event);
 }

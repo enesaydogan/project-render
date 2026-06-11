@@ -3,6 +3,8 @@
 #include "dxr_renderer.h"
 #include "streamline_manager.h" // Needed for Streamline init
 
+#include <mutex>
+
 // Top-level exception handler and driver hints can remain in main.cpp,
 // or we can put the hints here. We'll leave them in main.cpp for now.
 
@@ -293,20 +295,66 @@ void WaitForPreviousFrame() {
   g_fenceValues[g_frameIndex] = currentFenceValue + 1;
 }
 
+// Dedicated fence for WaitGPUIdle so it is safe to call from ANY thread.
+//
+// The previous implementation signaled the frame fence (g_fence), waited on
+// the shared auto-reset g_fenceEvent, and rewrote g_fenceValues[]. Scene I/O
+// runs on a worker thread and calls WaitGPUIdle via Scene::AddTexture /
+// RefreshAllMaterialRuntimeTextures, which raced the main thread's
+// WaitForPreviousFrame two ways: (1) the worker's wait could consume the
+// auto-reset event wakeup the main thread was blocked on INFINITE, and
+// (2) concurrent g_fenceValues[] writes made the frame fence signal
+// non-monotonically, so a waited-for value could simply never complete.
+// Either way the main thread froze while the loader finished — the classic
+// "console says loaded OK, GUI stuck on Uploading textures" hang.
+static ComPtr<ID3D12Fence> g_idleFence;
+static UINT64 g_idleFenceNextValue = 1;
+static std::mutex g_idleFenceMutex;
+
 void WaitGPUIdle() {
-  if (!g_commandQueue || !g_fence || !g_fenceEvent)
-    return;
-  const UINT64 waitValue = g_fenceValues[g_frameIndex] + 100;
-  HRESULT hr = g_commandQueue->Signal(g_fence.Get(), waitValue);
-  if (FAILED(hr))
+  if (!g_commandQueue || !g_device)
     return;
 
-  g_fence->SetEventOnCompletion(waitValue, g_fenceEvent);
-  WaitForSingleObject(g_fenceEvent, 5000);
-
-  for (UINT i = 0; i < FrameCount; ++i) {
-    g_fenceValues[i] = waitValue + 1;
+  ComPtr<ID3D12Fence> fence;
+  UINT64 waitValue = 0;
+  {
+    std::lock_guard<std::mutex> lock(g_idleFenceMutex);
+    if (!g_idleFence) {
+      if (FAILED(g_device->CreateFence(0, D3D12_FENCE_FLAG_NONE,
+                                       IID_PPV_ARGS(&g_idleFence)))) {
+        return;
+      }
+    }
+    fence = g_idleFence;
+    waitValue = g_idleFenceNextValue++;
   }
+
+  if (FAILED(g_commandQueue->Signal(fence.Get(), waitValue)))
+    return;
+  if (fence->GetCompletedValue() >= waitValue)
+    return;
+
+  // Per-call event: never shared across threads, so a concurrent waiter can
+  // not steal this thread's wakeup.
+  HANDLE event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+  if (!event) {
+    // Extremely unlikely; fall back to a bounded poll instead of hanging.
+    for (int i = 0; i < 5000 && fence->GetCompletedValue() < waitValue; ++i) {
+      Sleep(1);
+    }
+    return;
+  }
+  if (SUCCEEDED(fence->SetEventOnCompletion(waitValue, event))) {
+    if (WaitForSingleObject(event, 5000) == WAIT_TIMEOUT) {
+      fprintf(stderr,
+              "WaitGPUIdle: timed out after 5s (fence %llu, completed %llu, "
+              "device removed reason 0x%08x)\n",
+              (unsigned long long)waitValue,
+              (unsigned long long)fence->GetCompletedValue(),
+              (unsigned)(g_device ? g_device->GetDeviceRemovedReason() : S_OK));
+    }
+  }
+  CloseHandle(event);
 }
 
 void QueueResize(UINT width, UINT height) {
