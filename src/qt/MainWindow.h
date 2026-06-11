@@ -54,6 +54,7 @@ private:
     void startPreviewRender();
     void showRenderPopup();
     void showMemoryBreakdownPopup();
+    void showKeyboardShortcuts();
     void toggleQtUiVisibility();
     void updateSceneIoUi();
     void updateRenderExportProgressUi();

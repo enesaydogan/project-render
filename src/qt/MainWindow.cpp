@@ -42,6 +42,7 @@
 #include <QDoubleSpinBox>
 #include <QFileDialog>
 #include <QFormLayout>
+#include <QFontDatabase>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -1216,6 +1217,10 @@ void MainWindow::createMenus()
     });
 
     QMenu *helpMenu = menuBar()->addMenu(tr("&Help"));
+    helpMenu->addAction(tr("Keyboard &Shortcuts..."), this, [this]() {
+        showKeyboardShortcuts();
+    });
+    helpMenu->addSeparator();
     helpMenu->addAction(tr("&About"), this, [this]() {
         QString version = ReadAppVersion();
         if (version.isEmpty()) {
@@ -1274,6 +1279,93 @@ void MainWindow::createMenus()
 
         dialog.exec();
     });
+}
+
+void MainWindow::showKeyboardShortcuts()
+{
+    struct ShortcutEntry {
+        QString category;
+        QString shortcut;
+        QString description;
+    };
+
+    const std::vector<ShortcutEntry> entries = {
+        {tr("File"), tr("Ctrl+S"), tr("Save the current scene")},
+        {tr("File"), tr("Ctrl+Shift+S"), tr("Save the scene to a new file")},
+        {tr("File"), tr("Ctrl+O"), tr("Load a scene")},
+        {tr("File"), tr("F2"), tr("Start a preview render")},
+        {tr("Edit"), tr("Ctrl+Z"), tr("Undo the last transform")},
+        {tr("Edit"), tr("Ctrl+Y"), tr("Redo the last transform")},
+        {tr("Interface"), tr("F1"), tr("Show or hide the Qt interface")},
+        {tr("Viewport"), tr("W / A / S / D"), tr("Move the camera forward, left, backward, or right")},
+        {tr("Viewport"), tr("Q / E"), tr("Move the camera up or down")},
+        {tr("Viewport"), tr("Shift"), tr("Move the camera faster while held")},
+        {tr("Viewport"), tr("Right mouse drag"), tr("Look around with the camera")},
+        {tr("Viewport"), tr("F"), tr("Frame the current selection")},
+        {tr("Viewport"), tr("F4"), tr("Switch between raster and ray tracing modes")},
+        {tr("Selection"), tr("Left click"), tr("Select an object or light")},
+        {tr("Selection"), tr("Ctrl+Left click"), tr("Add or remove an object or light from the selection")},
+        {tr("Selection"), tr("Delete"), tr("Delete the current object or light selection")},
+        {tr("Selection"), tr("Escape"), tr("Cancel preview or light placement; otherwise clear the selection")},
+        {tr("Transform"), tr("G"), tr("Use the translate gizmo")},
+        {tr("Transform"), tr("R"), tr("Use the rotate gizmo")},
+        {tr("Transform"), tr("T"), tr("Use the scale gizmo")},
+        {tr("Transform"), tr("L"), tr("Toggle between local and world transform space")},
+        {tr("Transform"), tr("Shift+Gizmo drag"), tr("Clone the selection while transforming it")},
+        {tr("Legacy ImGui"), tr("F5"), tr("Show or hide the ImGui interface")},
+        {tr("Legacy ImGui"), tr("M"), tr("Show or hide the ImGui material editor")},
+    };
+
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("Keyboard Shortcuts"));
+    dialog.setModal(true);
+    dialog.resize(780, 590);
+
+    auto *layout = new QVBoxLayout(&dialog);
+    auto *intro = new QLabel(
+        tr("Application shortcuts work anywhere unless a modal dialog is open. "
+           "Viewport controls require the 3D viewport to have focus."),
+        &dialog);
+    intro->setWordWrap(true);
+    layout->addWidget(intro);
+
+    auto *table = new QTableWidget(static_cast<int>(entries.size()), 3, &dialog);
+    table->setHorizontalHeaderLabels(
+        {tr("Category"), tr("Shortcut"), tr("Action")});
+    table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    table->setSelectionBehavior(QAbstractItemView::SelectRows);
+    table->setSelectionMode(QAbstractItemView::SingleSelection);
+    table->setAlternatingRowColors(true);
+    table->verticalHeader()->setVisible(false);
+    table->horizontalHeader()->setSectionResizeMode(
+        0, QHeaderView::ResizeToContents);
+    table->horizontalHeader()->setSectionResizeMode(
+        1, QHeaderView::ResizeToContents);
+    table->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
+
+    for (int row = 0; row < static_cast<int>(entries.size()); ++row) {
+        const ShortcutEntry &entry = entries[static_cast<size_t>(row)];
+        auto *categoryItem = new QTableWidgetItem(entry.category);
+        auto *shortcutItem = new QTableWidgetItem(entry.shortcut);
+        auto *descriptionItem = new QTableWidgetItem(entry.description);
+        shortcutItem->setFont(QFontDatabase::systemFont(
+            QFontDatabase::FixedFont));
+        table->setItem(row, 0, categoryItem);
+        table->setItem(row, 1, shortcutItem);
+        table->setItem(row, 2, descriptionItem);
+    }
+    table->resizeRowsToContents();
+    layout->addWidget(table, 1);
+
+    auto *buttonRow = new QHBoxLayout();
+    buttonRow->addStretch(1);
+    auto *closeButton = new QPushButton(tr("Close"), &dialog);
+    closeButton->setDefault(true);
+    connect(closeButton, &QPushButton::clicked, &dialog, &QDialog::accept);
+    buttonRow->addWidget(closeButton);
+    layout->addLayout(buttonRow);
+
+    dialog.exec();
 }
 
 void MainWindow::createToolBar()
