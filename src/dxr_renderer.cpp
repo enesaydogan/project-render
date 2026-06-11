@@ -2441,7 +2441,7 @@ static void UploadWavefrontIndirectDispatchRecords(
     record.desc.RayGenerationShaderRecord.SizeInBytes =
         s_wavefrontRayGenShaderTableEntrySize;
     record.desc.MissShaderTable.StartAddress = s_missShaderTable;
-    record.desc.MissShaderTable.SizeInBytes = s_shaderTableEntrySize;
+    record.desc.MissShaderTable.SizeInBytes = 2 * s_shaderTableEntrySize;
     record.desc.MissShaderTable.StrideInBytes = s_shaderTableEntrySize;
     record.desc.HitGroupTable.StartAddress = s_wavefrontHitGroupShaderTable;
     record.desc.HitGroupTable.SizeInBytes = s_shaderTableEntrySize;
@@ -2608,7 +2608,7 @@ static void DispatchWavefrontPrimaryVisibility(
   dispatchDesc.RayGenerationShaderRecord.SizeInBytes =
       s_wavefrontRayGenShaderTableEntrySize;
   dispatchDesc.MissShaderTable.StartAddress = s_missShaderTable;
-  dispatchDesc.MissShaderTable.SizeInBytes = s_shaderTableEntrySize;
+  dispatchDesc.MissShaderTable.SizeInBytes = 2 * s_shaderTableEntrySize;
   dispatchDesc.MissShaderTable.StrideInBytes = s_shaderTableEntrySize;
   dispatchDesc.HitGroupTable.StartAddress = s_wavefrontHitGroupShaderTable;
   dispatchDesc.HitGroupTable.SizeInBytes = s_shaderTableEntrySize;
@@ -2649,7 +2649,7 @@ static void DispatchWavefrontSecondaryVisibility(
     dispatchDesc.RayGenerationShaderRecord.SizeInBytes =
         s_wavefrontRayGenShaderTableEntrySize;
     dispatchDesc.MissShaderTable.StartAddress = s_missShaderTable;
-    dispatchDesc.MissShaderTable.SizeInBytes = s_shaderTableEntrySize;
+    dispatchDesc.MissShaderTable.SizeInBytes = 2 * s_shaderTableEntrySize;
     dispatchDesc.MissShaderTable.StrideInBytes = s_shaderTableEntrySize;
     dispatchDesc.HitGroupTable.StartAddress = s_wavefrontHitGroupShaderTable;
     dispatchDesc.HitGroupTable.SizeInBytes = s_shaderTableEntrySize;
@@ -2684,7 +2684,7 @@ static void DispatchWavefrontShadowVisibility(
     dispatchDesc.RayGenerationShaderRecord.SizeInBytes =
         s_wavefrontRayGenShaderTableEntrySize;
     dispatchDesc.MissShaderTable.StartAddress = s_missShaderTable;
-    dispatchDesc.MissShaderTable.SizeInBytes = s_shaderTableEntrySize;
+    dispatchDesc.MissShaderTable.SizeInBytes = 2 * s_shaderTableEntrySize;
     dispatchDesc.MissShaderTable.StrideInBytes = s_shaderTableEntrySize;
     dispatchDesc.HitGroupTable.StartAddress = s_wavefrontHitGroupShaderTable;
     dispatchDesc.HitGroupTable.SizeInBytes = s_shaderTableEntrySize;
@@ -4642,7 +4642,7 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
 
   // Create state object (DXIL lib etc.)
   static D3D12_DXIL_LIBRARY_DESC libDesc = {};
-  static D3D12_EXPORT_DESC exports[6] = {};
+  static D3D12_EXPORT_DESC exports[7] = {};
   static D3D12_HIT_GROUP_DESC hitGroupDesc = {};
   static D3D12_RAYTRACING_SHADER_CONFIG shaderConfig = {};
   static D3D12_RAYTRACING_PIPELINE_CONFIG pipelineConfig = {};
@@ -4654,9 +4654,10 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   exports[1].Name = L"WavefrontSecondaryRayGen";
   exports[2].Name = L"WavefrontShadowRayGen";
   exports[3].Name = L"Miss";
-  exports[4].Name = L"AnyHit";
-  exports[5].Name = L"WavefrontClosestHit";
-  libDesc.NumExports = 6;
+  exports[4].Name = L"ShadowMiss";
+  exports[5].Name = L"AnyHit";
+  exports[6].Name = L"WavefrontClosestHit";
+  libDesc.NumExports = 7;
   libDesc.pExports = exports;
   D3D12_STATE_SUBOBJECT libSub = {};
   libSub.Type = D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY;
@@ -4680,7 +4681,11 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   shaderConfigSub.Type = D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_SHADER_CONFIG;
   shaderConfigSub.pDesc = &shaderConfig;
 
-  pipelineConfig.MaxTraceRecursionDepth = 4;
+  // Depth 2 is exact for the wavefront pipeline: raygen traces (depth 1) and
+  // the closest-hit GI_EVAL path traces one nested shadow ray (depth 2). No
+  // shader traces deeper. Keeping this tight lets drivers allocate a smaller
+  // per-thread traversal stack.
+  pipelineConfig.MaxTraceRecursionDepth = 2;
   D3D12_STATE_SUBOBJECT pipeConfigSub = {};
   pipeConfigSub.Type = D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_PIPELINE_CONFIG;
   pipeConfigSub.pDesc = &pipelineConfig;
@@ -4746,10 +4751,12 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   void *wavefrontShadowRayGenId =
       properties->GetShaderIdentifier(L"WavefrontShadowRayGen");
   void *missId = properties->GetShaderIdentifier(L"Miss");
+  void *shadowMissId = properties->GetShaderIdentifier(L"ShadowMiss");
   void *wavefrontHitGroupId =
       properties->GetShaderIdentifier(L"WavefrontHitGroup");
   if (!wavefrontRayGenId || !wavefrontSecondaryRayGenId ||
-      !wavefrontShadowRayGenId || !missId || !wavefrontHitGroupId) {
+      !wavefrontShadowRayGenId || !missId || !shadowMissId ||
+      !wavefrontHitGroupId) {
     fprintf(stderr, "DxrRenderer: Shader IDs null\n");
     return;
   }
@@ -4761,9 +4768,10 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   s_wavefrontRayGenShaderTableEntrySize = s_rayGenEntrySize;
   s_shaderTableEntrySize = Align(shaderIdentifierSize,
                                  D3D12_RAYTRACING_SHADER_RECORD_BYTE_ALIGNMENT);
-  // Total SBT size: 3 wavefront raygen records + miss + wavefront hit.
+  // Total SBT size: 3 wavefront raygen records + 2 miss (Miss, ShadowMiss) +
+  // wavefront hit.
   UINT64 shaderTableSize =
-      (3 * s_rayGenEntrySize) + (2 * s_shaderTableEntrySize);
+      (3 * s_rayGenEntrySize) + (3 * s_shaderTableEntrySize);
   AllocateUploadBuffer(s_device, nullptr, shaderTableSize, &s_sbtStorage,
                        L"Shader Table");
   UINT8 *pData = nullptr;
@@ -4775,6 +4783,8 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
          shaderIdentifierSize);
   memcpy(pData + (3 * s_rayGenEntrySize), missId, shaderIdentifierSize);
   memcpy(pData + (3 * s_rayGenEntrySize) + s_shaderTableEntrySize,
+         shadowMissId, shaderIdentifierSize);
+  memcpy(pData + (3 * s_rayGenEntrySize) + (2 * s_shaderTableEntrySize),
          wavefrontHitGroupId, shaderIdentifierSize);
   s_sbtStorage->Unmap(0, nullptr);
   D3D12_GPU_VIRTUAL_ADDRESS baseAddr = s_sbtStorage->GetGPUVirtualAddress();
@@ -4782,7 +4792,8 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   s_wavefrontSecondaryRayGenShaderTable = baseAddr + s_rayGenEntrySize;
   s_wavefrontShadowRayGenShaderTable = baseAddr + (2 * s_rayGenEntrySize);
   s_missShaderTable = baseAddr + (3 * s_rayGenEntrySize);
-  s_wavefrontHitGroupShaderTable = s_missShaderTable + s_shaderTableEntrySize;
+  s_wavefrontHitGroupShaderTable =
+      s_missShaderTable + (2 * s_shaderTableEntrySize);
   s_uploadedWavefrontSecondaryRayGen = 0;
   s_uploadedWavefrontShadowRayGen = 0;
 

@@ -4,6 +4,16 @@
 #include "common.hlsli"
 #include "../clouds.hlsl" // Volume Clouds logic
 
+// Minimal miss for visibility-only (shadow/occlusion) rays. Shadow traces
+// only test payload.t < 0 for "unoccluded"; routing them here (miss table
+// index 1) skips the env-map, sun-disc and cloud sampling in Miss below,
+// which otherwise runs for every visible shadow ray.
+[shader("miss")]
+void ShadowMiss(inout RayPayload payload)
+{
+    payload.t = -1.0;
+}
+
 [shader("miss")]
 void Miss(inout RayPayload payload)
 {

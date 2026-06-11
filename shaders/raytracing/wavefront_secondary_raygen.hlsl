@@ -66,16 +66,29 @@ void WavefrontSecondaryRayGen()
         return;
     }
 
-    uint lanePreviousValue = 0u;
-    if (rayType == RAY_TYPE_DIFFUSE) {
-        InterlockedAdd(g_wavefrontStats[47], 1u, lanePreviousValue);
-    } else if (rayType == RAY_TYPE_REFLECTION || rayType == RAY_TYPE_REFRACTION) {
-        InterlockedAdd(g_wavefrontStats[48], 1u, lanePreviousValue);
+    // Aggregate per-ray-type lane stats per wave instead of one global
+    // atomic per ray.
+    const bool isDiffuseLane = (rayType == RAY_TYPE_DIFFUSE);
+    const bool isSpecularLane =
+        (rayType == RAY_TYPE_REFLECTION || rayType == RAY_TYPE_REFRACTION);
+    const uint waveDiffuseCount = WaveActiveCountBits(isDiffuseLane);
+    const uint waveSpecularCount = WaveActiveCountBits(isSpecularLane);
+    if (WaveIsFirstLane()) {
+        uint lanePreviousValue = 0u;
+        if (waveDiffuseCount != 0u) {
+            InterlockedAdd(g_wavefrontStats[47], waveDiffuseCount,
+                           lanePreviousValue);
+        }
+        if (waveSpecularCount != 0u) {
+            InterlockedAdd(g_wavefrontStats[48], waveSpecularCount,
+                           lanePreviousValue);
+        }
     }
 
+    const float3 traceDirection = normalize(state.direction);
     RayDesc ray;
     ray.Origin = state.origin;
-    ray.Direction = normalize(state.direction);
+    ray.Direction = traceDirection;
     ray.TMin = 0.002;
     ray.TMax = 10000.0;
 
@@ -113,7 +126,7 @@ void WavefrontSecondaryRayGen()
     record.surface = payload.surface;
     record.guideOrigin = state.origin;
     record.guidePackedState = (payload.t < 0.0) ? WAVEFRONT_GUIDE_STATE_MISS : 0u;
-    record.guideDirection = normalize(state.direction);
+    record.guideDirection = traceDirection;
     record.guideHitT = payload.t;
     record.guidePackedNormal = payload.packedNormal;
     record.guidePackedAlbedo = payload.packedAlbedo;
@@ -124,13 +137,25 @@ void WavefrontSecondaryRayGen()
     record.guideReserved1 = 0u;
     record.guideSurface = payload.surface;
 
-    if (payload.t < 0.0) {
+    const bool isMiss = (payload.t < 0.0);
+    if (isMiss) {
         record.packedState |= WAVEFRONT_HIT_STATE_MISS;
+    }
+
+    // Aggregate hit/miss stats per wave instead of one global atomic per ray.
+    const uint waveMissCount = WaveActiveCountBits(isMiss);
+    const uint waveHitCount = WaveActiveCountBits(!isMiss);
+    if (WaveIsFirstLane()) {
         uint previousValue = 0u;
-        InterlockedAdd(g_wavefrontStats[25], 1u, previousValue);
-    } else {
-        uint previousValue = 0u;
-        InterlockedAdd(g_wavefrontStats[24], 1u, previousValue);
+        if (waveMissCount != 0u) {
+            InterlockedAdd(g_wavefrontStats[25], waveMissCount, previousValue);
+        }
+        if (waveHitCount != 0u) {
+            InterlockedAdd(g_wavefrontStats[24], waveHitCount, previousValue);
+        }
+    }
+
+    if (!isMiss) {
         WavefrontCompactMaterialBinIndex(
             WAVEFRONT_SECONDARY_MATERIAL_BIN_STATS_BASE, record.reserved,
             pathIndex);

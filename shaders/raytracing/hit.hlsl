@@ -1741,7 +1741,8 @@ void ClosestHitImpl(inout RayPayload payload,
             shadowPayload.packedSpecular = PackPayloadSpecularColor(float3(1.0, 1.0, 1.0));
             shadowPayload.packedParallaxSelfShadow =
                 PackWavefrontParallaxSelfShadow(1.0);
-            TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, 0xFF, 0, 0, 0, shadowRay, shadowPayload);
+            // Miss shader index 1 = ShadowMiss (visibility only).
+            TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, 0xFF, 0, 0, 1, shadowRay, shadowPayload);
 
             if (shadowPayload.t < 0.0) { // Miss = not occluded
                 float3 radiance = lightColor.rgb * lightColor.w;

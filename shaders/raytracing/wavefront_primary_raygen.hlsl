@@ -102,22 +102,37 @@ void WavefrontPrimaryRayGen()
     record.guideReserved1 = 0u;
     record.guideSurface = guidePayload.surface;
 
-    if (payload.t < 0.0) {
+    const bool isMiss = (payload.t < 0.0);
+    if (isMiss) {
         if (dlssRayReconstruction > 0.5 &&
             (guideState & WAVEFRONT_GUIDE_STATE_MISS) != 0u) {
             record.packedColor0 = guidePayload.packedColor0;
             record.packedColor1 = guidePayload.packedColor1;
         }
-        uint previousValue = 0u;
         record.packedState |= WAVEFRONT_HIT_STATE_MISS;
-        InterlockedAdd(g_wavefrontQueueCounters[WAVEFRONT_QUEUE_PRIMARY_MISS],
-                       1u, previousValue);
-        InterlockedAdd(g_wavefrontStats[7], 1u, previousValue);
-    } else {
+    }
+
+    // Aggregate hit/miss counters per wave: one atomic per wave instead of
+    // two per ray.
+    const uint waveMissCount = WaveActiveCountBits(isMiss);
+    const uint waveHitCount = WaveActiveCountBits(!isMiss);
+    if (WaveIsFirstLane()) {
         uint previousValue = 0u;
-        InterlockedAdd(g_wavefrontQueueCounters[WAVEFRONT_QUEUE_PRIMARY_HIT],
-                       1u, previousValue);
-        InterlockedAdd(g_wavefrontStats[6], 1u, previousValue);
+        if (waveMissCount != 0u) {
+            InterlockedAdd(
+                g_wavefrontQueueCounters[WAVEFRONT_QUEUE_PRIMARY_MISS],
+                waveMissCount, previousValue);
+            InterlockedAdd(g_wavefrontStats[7], waveMissCount, previousValue);
+        }
+        if (waveHitCount != 0u) {
+            InterlockedAdd(
+                g_wavefrontQueueCounters[WAVEFRONT_QUEUE_PRIMARY_HIT],
+                waveHitCount, previousValue);
+            InterlockedAdd(g_wavefrontStats[6], waveHitCount, previousValue);
+        }
+    }
+
+    if (!isMiss) {
         WavefrontCompactMaterialBinIndex(
             WAVEFRONT_PRIMARY_MATERIAL_BIN_STATS_BASE, record.reserved,
             pathIndex);

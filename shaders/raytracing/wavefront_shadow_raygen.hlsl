@@ -72,21 +72,33 @@ void WavefrontShadowRayGen()
     shadowRay.TMin = 0.001;
     shadowRay.TMax = max(0.001, task.maxDistance - 0.002);
 
-    TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, 0xFF, 0, 0, 0, shadowRay, shadowPayload);
+    // Miss shader index 1 = ShadowMiss (visibility only, skips sky/clouds).
+    TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, 0xFF, 0, 0, 1, shadowRay, shadowPayload);
     const bool visible = (shadowPayload.t < 0.0);
     SHADER_COUNTER_ADD(SHADER_COUNTER_SHADOW_TRACES, 1);
 
-    if (visible) {
+    // Aggregate the visible/blocked stats per wave instead of one global
+    // atomic per ray.
+    const uint waveVisibleCount = WaveActiveCountBits(visible);
+    const uint waveBlockedCount = WaveActiveCountBits(!visible);
+    if (WaveIsFirstLane()) {
         uint previousValue = 0u;
-        InterlockedAdd(g_wavefrontStats[30], 1u, previousValue);
+        if (waveVisibleCount != 0u) {
+            InterlockedAdd(g_wavefrontStats[30], waveVisibleCount,
+                           previousValue);
+        }
+        if (waveBlockedCount != 0u) {
+            InterlockedAdd(g_wavefrontStats[31], waveBlockedCount,
+                           previousValue);
+        }
+    }
+
+    if (visible) {
         float3 contribution = max(task.throughput, 0.0);
         if (lightSampleType == WAVEFRONT_LIGHT_SAMPLE_ENV) {
             contribution *= WavefrontEvaluateShadowTaskRadiance(
                 task.packedLightIndex, task.origin, task.direction);
         }
         WavefrontAtomicAddShadowContribution(pixelIndex, contribution);
-    } else {
-        uint previousValue = 0u;
-        InterlockedAdd(g_wavefrontStats[31], 1u, previousValue);
     }
 }
