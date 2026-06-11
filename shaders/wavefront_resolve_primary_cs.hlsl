@@ -2114,8 +2114,9 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     }
 
     if (dlssRayReconstruction > 0.5) {
-        if (WavefrontHitRecordGuideIsMiss(record)) {
-            float3 guideSkyDir = normalize(record.guideDirection);
+        WavefrontGuideRecord guideRecord = g_wavefrontGuideQueue[pathIndex];
+        if (WavefrontGuideRecordIsMiss(guideRecord)) {
+            float3 guideSkyDir = normalize(guideRecord.guideDirection);
             depth = farZ;
             linearDepth = farZ;
             motion = ComputeWavefrontSkyMotion(guideSkyDir, currScreen);
@@ -2131,21 +2132,23 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             rrSpecHitDistance = 0.0;
             rrSpecMotion = kInvalidMvec;
         } else {
-            float3 guideDir = normalize(record.guideDirection);
-            float3 guideHitPos = record.guideOrigin + guideDir * record.guideHitT;
+            float3 guideDir = normalize(guideRecord.guideDirection);
+            float3 guideHitPos =
+                guideRecord.guideOrigin + guideDir * guideRecord.guideHitT;
             float3 guideNormal =
-                UnpackNormalOctahedron(record.guidePackedNormal);
-            float3 guideAlbedo = UnpackPayloadAlbedo(record.guidePackedAlbedo);
-            float4 guideSurface = WavefrontHitRecordGuideSurface(record);
+                UnpackNormalOctahedron(guideRecord.guidePackedNormal);
+            float3 guideAlbedo =
+                UnpackPayloadAlbedo(guideRecord.guidePackedAlbedo);
+            float4 guideSurface = WavefrontGuideRecordSurface(guideRecord);
             float guideRoughness = saturate(guideSurface.x);
             float guideMetallic = saturate(guideSurface.y);
             float guideTransmission = saturate(guideSurface.z);
             float guideSpecularWeight =
                 saturate(UnpackPayloadSpecularWeight(
-                    record.guidePackedIorType));
-            float guideIor = UnpackPayloadIor(record.guidePackedIorType);
+                    guideRecord.guidePackedIorType));
+            float guideIor = UnpackPayloadIor(guideRecord.guidePackedIorType);
             float3 guideSpecularColor =
-                UnpackPayloadSpecularColor(record.guidePackedSpecular);
+                UnpackPayloadSpecularColor(guideRecord.guidePackedSpecular);
 
             normal = guideNormal;
             albedo = guideAlbedo;
@@ -2165,7 +2168,7 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             float viewZ = dot(guideHitPos - camPos, forwardDir);
             float preserveDepth =
                 (projectionMode >= CAMERA_PROJECTION_SPHERICAL_360 - 0.5)
-                    ? record.guideHitT
+                    ? guideRecord.guideHitT
                     : viewZ;
             if (preserveDepth > 0.0) {
                 linearDepth = preserveDepth;

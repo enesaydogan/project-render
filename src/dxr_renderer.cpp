@@ -119,6 +119,10 @@ static UINT *s_frameIndexPtr = nullptr;
 static HANDLE s_fenceEvent = nullptr;
 
 bool g_rayTracingSupported = false; // defined here
+// Hardware raytracing tier from D3D12_OPTIONS5. Gates DXR support and lets
+// pipeline creation opt into tier-1.1 features (PIPELINE_CONFIG1 flags).
+static D3D12_RAYTRACING_TIER s_raytracingTier =
+    D3D12_RAYTRACING_TIER_NOT_SUPPORTED;
 static UINT s_grassTlasStartIndex = 0xFFFFFFFFu;
 
 // DXR-specific state kept internal to this module
@@ -180,6 +184,14 @@ struct WavefrontHitRecordGpu {
   uint32_t packedState;
   uint32_t reserved;
   float surface[4];
+};
+static_assert(sizeof(WavefrontHitRecordGpu) == 60,
+              "WavefrontHitRecordGpu must stay tightly packed.");
+
+// DLSS-RR guide data, split out of the hit record (shader ABI v6). Same
+// index space as the hit queue; written by the primary raygen only when RR
+// or the primary-guide feature is active.
+struct WavefrontGuideRecordGpu {
   float guideOrigin[3];
   uint32_t guidePackedState;
   float guideDirection[3];
@@ -189,12 +201,10 @@ struct WavefrontHitRecordGpu {
   uint32_t guidePackedIorType;
   uint32_t guidePackedTransmission;
   uint32_t guidePackedSpecular;
-  uint32_t guideReserved0;
-  uint32_t guideReserved1;
   float guideSurface[4];
 };
-static_assert(sizeof(WavefrontHitRecordGpu) == 136,
-              "WavefrontHitRecordGpu must stay tightly packed.");
+static_assert(sizeof(WavefrontGuideRecordGpu) == 68,
+              "WavefrontGuideRecordGpu must stay tightly packed.");
 
 struct WavefrontShadowTaskGpu {
   float origin[3];
@@ -223,9 +233,10 @@ struct WavefrontDispatchRaysRecordGpu {
 static_assert(sizeof(WavefrontDispatchRaysRecordGpu) == 112,
               "WavefrontDispatchRaysRecordGpu must match indirect buffer stride.");
 
-static constexpr UINT kWavefrontAbiVersion = 5;
+static constexpr UINT kWavefrontAbiVersion = 6;
 static constexpr UINT kWavefrontPathStateDwords = 12;
-static constexpr UINT kWavefrontHitRecordDwords = 34;
+static constexpr UINT kWavefrontHitRecordDwords = 15;
+static constexpr UINT kWavefrontGuideRecordDwords = 17;
 static constexpr UINT kWavefrontShadowTaskDwords = 12;
 static constexpr UINT kWavefrontDispatchArgsDwords = 4;
 static constexpr UINT kWavefrontQueueCounterCount = 16;
@@ -275,7 +286,7 @@ static const char *WavefrontQueueProfileName(WavefrontQueueProfile profile) {
   }
   return "unknown";
 }
-static_assert(kWavefrontAbiVersion == 5,
+static_assert(kWavefrontAbiVersion == 6,
               "Bump shader WAVEFRONT_ABI_VERSION and docs with ABI changes.");
 static_assert(sizeof(WavefrontPathStateGpu) / sizeof(uint32_t) ==
                   kWavefrontPathStateDwords,
@@ -283,6 +294,9 @@ static_assert(sizeof(WavefrontPathStateGpu) / sizeof(uint32_t) ==
 static_assert(sizeof(WavefrontHitRecordGpu) / sizeof(uint32_t) ==
                   kWavefrontHitRecordDwords,
               "CPU HitRecord dword count must match the shader ABI.");
+static_assert(sizeof(WavefrontGuideRecordGpu) / sizeof(uint32_t) ==
+                  kWavefrontGuideRecordDwords,
+              "CPU GuideRecord dword count must match the shader ABI.");
 static_assert(sizeof(WavefrontShadowTaskGpu) / sizeof(uint32_t) ==
                   kWavefrontShadowTaskDwords,
               "CPU ShadowTask dword count must match the shader ABI.");
@@ -306,7 +320,7 @@ static const UINT DXR_HEAP_TEX_OFFSET = 0;
 static const UINT DXR_HEAP_VB_OFFSET = DXR_HEAP_TEX_OFFSET + DXR_HEAP_TEX_COUNT;
 static const UINT DXR_HEAP_IB_OFFSET = DXR_HEAP_VB_OFFSET + DXR_HEAP_VB_COUNT;
 static const UINT DXR_HEAP_UAV_OFFSET = DXR_HEAP_IB_OFFSET + DXR_HEAP_IB_COUNT;
-static const UINT DXR_HEAP_UAV_COUNT = 38; // u0..u37 (ReGIR cells at u36; u37 reserved)
+static const UINT DXR_HEAP_UAV_COUNT = 38; // u0..u37 (ReGIR cells at u36; wavefront guide queue at u37)
 static const UINT DXR_HEAP_ACCUM_UAV_OFFSET = DXR_HEAP_UAV_OFFSET + 1;
 static const UINT DXR_HEAP_RESERVOIR_0_OFFSET = DXR_HEAP_UAV_OFFSET + 2;
 static const UINT DXR_HEAP_RESERVOIR_1_OFFSET = DXR_HEAP_UAV_OFFSET + 3;
@@ -356,6 +370,7 @@ static const UINT DXR_HEAP_OIDN_ALBEDO_GUIDE_OFFSET =
 static const UINT DXR_HEAP_OIDN_NORMAL_GUIDE_OFFSET =
     DXR_HEAP_UAV_OFFSET + 35;
 static const UINT DXR_HEAP_REGIR_CELLS_OFFSET = DXR_HEAP_UAV_OFFSET + 36;
+static const UINT DXR_HEAP_WAVEFRONT_GUIDE_OFFSET = DXR_HEAP_UAV_OFFSET + 37;
 
 // Dedicated SRV blocks after UAV range so UAV registers stay stable.
 static const UINT DXR_HEAP_ENV_SRV_OFFSET =
@@ -799,6 +814,7 @@ static ComPtr<ID3D12Resource> s_wavefrontQueueCountersBuffer;
 static ComPtr<ID3D12Resource> s_wavefrontPathQueueABuffer;
 static ComPtr<ID3D12Resource> s_wavefrontPathQueueBBuffer;
 static ComPtr<ID3D12Resource> s_wavefrontHitQueueBuffer;
+static ComPtr<ID3D12Resource> s_wavefrontGuideQueueBuffer;
 static ComPtr<ID3D12Resource> s_wavefrontShadowQueueBuffer;
 static ComPtr<ID3D12Resource> s_wavefrontDispatchArgsBuffer;
 static ComPtr<ID3D12Resource> s_wavefrontStatsBuffer;
@@ -4025,6 +4041,22 @@ void Initialize(ID3D12Device *device) {
     g_rayTracingSupported = false;
     return;
   }
+  // ID3D12Device5 is exposed by any 1809+ runtime even when the adapter has
+  // no raytracing support, so the QueryInterface alone is not a valid DXR
+  // gate — the actual capability lives in OPTIONS5.RaytracingTier.
+  D3D12_FEATURE_DATA_D3D12_OPTIONS5 options5 = {};
+  if (FAILED(s_device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS5,
+                                           &options5, sizeof(options5))) ||
+      options5.RaytracingTier == D3D12_RAYTRACING_TIER_NOT_SUPPORTED) {
+    g_rayTracingSupported = false;
+    s_raytracingTier = D3D12_RAYTRACING_TIER_NOT_SUPPORTED;
+    s_dxrDevice.Reset();
+    fprintf(stderr, "DxrRenderer: DXR not supported on device "
+                    "(OPTIONS5.RaytracingTier == NOT_SUPPORTED)\n");
+    return;
+  }
+  s_raytracingTier = options5.RaytracingTier;
+
   ComPtr<ID3D12Device5> dev5;
   if (SUCCEEDED(s_device->QueryInterface(IID_PPV_ARGS(&dev5)))) {
     g_rayTracingSupported = true;
@@ -4032,9 +4064,11 @@ void Initialize(ID3D12Device *device) {
     s_accumulation.Initialize(s_device, s_outputWidth, s_outputHeight);
     s_transmissionAccumulation.Initialize(s_device, s_outputWidth,
                                           s_outputHeight);
-    fprintf(stderr, "DxrRenderer: DXR supported on device\n");
+    fprintf(stderr, "DxrRenderer: DXR supported on device (tier %d.%d)\n",
+            (int)s_raytracingTier / 10, (int)s_raytracingTier % 10);
   } else {
     g_rayTracingSupported = false;
+    s_raytracingTier = D3D12_RAYTRACING_TIER_NOT_SUPPORTED;
     s_dxrDevice.Reset();
   }
 }
@@ -4646,6 +4680,7 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   static D3D12_HIT_GROUP_DESC hitGroupDesc = {};
   static D3D12_RAYTRACING_SHADER_CONFIG shaderConfig = {};
   static D3D12_RAYTRACING_PIPELINE_CONFIG pipelineConfig = {};
+  static D3D12_RAYTRACING_PIPELINE_CONFIG1 pipelineConfig1 = {};
   static D3D12_GLOBAL_ROOT_SIGNATURE globalRootSigDesc = {};
 
   libDesc.DXILLibrary.pShaderBytecode = shaderBlob->GetBufferPointer();
@@ -4671,8 +4706,9 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   hitSub.Type = D3D12_STATE_SUBOBJECT_TYPE_HIT_GROUP;
   hitSub.pDesc = &hitGroupDesc;
 
-  constexpr UINT kRayPayloadSizeInBytes =
-      sizeof(float) + 9u * sizeof(uint32_t) + 4u * sizeof(float);
+  // Must match RayPayload in shaders/raytracing/common.hlsli:
+  // float t + 8 packed uints + uint2 packedSurface + uint parallax = 11 dwords.
+  constexpr UINT kRayPayloadSizeInBytes = 11u * sizeof(uint32_t);
   fprintf(stderr, "DxrRenderer: MaxPayloadSizeInBytes=%u\n",
           kRayPayloadSizeInBytes);
   shaderConfig.MaxPayloadSizeInBytes = kRayPayloadSizeInBytes;
@@ -4685,10 +4721,22 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   // the closest-hit GI_EVAL path traces one nested shadow ray (depth 2). No
   // shader traces deeper. Keeping this tight lets drivers allocate a smaller
   // per-thread traversal stack.
-  pipelineConfig.MaxTraceRecursionDepth = 2;
+  constexpr UINT kMaxTraceRecursionDepth = 2;
   D3D12_STATE_SUBOBJECT pipeConfigSub = {};
-  pipeConfigSub.Type = D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_PIPELINE_CONFIG;
-  pipeConfigSub.pDesc = &pipelineConfig;
+  if (s_raytracingTier >= D3D12_RAYTRACING_TIER_1_1) {
+    // Tier 1.1: PIPELINE_CONFIG1 lets us declare the pipeline triangles-only,
+    // which drivers use to skip procedural-primitive handling in traversal.
+    pipelineConfig1.MaxTraceRecursionDepth = kMaxTraceRecursionDepth;
+    pipelineConfig1.Flags =
+        D3D12_RAYTRACING_PIPELINE_FLAG_SKIP_PROCEDURAL_PRIMITIVES;
+    pipeConfigSub.Type =
+        D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_PIPELINE_CONFIG1;
+    pipeConfigSub.pDesc = &pipelineConfig1;
+  } else {
+    pipelineConfig.MaxTraceRecursionDepth = kMaxTraceRecursionDepth;
+    pipeConfigSub.Type = D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_PIPELINE_CONFIG;
+    pipeConfigSub.pDesc = &pipelineConfig;
+  }
 
   globalRootSigDesc.pGlobalRootSignature = s_rtGlobalRootSignature.Get();
   D3D12_STATE_SUBOBJECT rootSigSub = {};
@@ -4717,7 +4765,7 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
             "recursion=%u rootParams=%u\n",
             shaderConfig.MaxPayloadSizeInBytes,
             shaderConfig.MaxAttributeSizeInBytes,
-            pipelineConfig.MaxTraceRecursionDepth, rootDesc.NumParameters);
+            kMaxTraceRecursionDepth, rootDesc.NumParameters);
     if (g_dxrDumpD3D12Messages) {
       ComPtr<ID3D12InfoQueue> infoQueue;
       if (SUCCEEDED(s_device->QueryInterface(IID_PPV_ARGS(&infoQueue)))) {
@@ -5299,6 +5347,11 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
                   sizeof(WavefrontHitRecordGpu),
                   DXR_HEAP_WAVEFRONT_HIT_OFFSET,
                   L"Wavefront Hit Queue");
+    CreateStructuredBufferUav(s_wavefrontGuideQueueBuffer,
+                  s_wavefrontHitQueueCapacity,
+                  sizeof(WavefrontGuideRecordGpu),
+                  DXR_HEAP_WAVEFRONT_GUIDE_OFFSET,
+                  L"Wavefront Guide Queue");
     CreateStructuredBufferUav(s_wavefrontShadowQueueBuffer,
                   s_wavefrontShadowQueueCapacity,
                   sizeof(WavefrontShadowTaskGpu),
@@ -5547,6 +5600,20 @@ static void ClearDirtyMaterialsForMeshes(
   }
 }
 
+// Async TLAS update context. The TLAS-only fast path (grass camera refresh /
+// transform-only refits) records into these persistent objects and submits
+// WITHOUT a CPU fence wait: the direct queue serializes the build against
+// both the prior frame's traversal and the next frame's DispatchRays, so the
+// only thing a CPU wait ever protected was resource lifetime — which keeping
+// these alive (plus the previous-build fence check before reuse) covers.
+static ComPtr<ID3D12CommandAllocator> s_tlasUpdateCmdAlloc;
+static ComPtr<ID3D12GraphicsCommandList4> s_tlasUpdateCmdList;
+static ComPtr<ID3D12Resource> s_tlasInstanceUpload;
+static UINT64 s_tlasInstanceUploadCapacity = 0;
+static UINT64 s_lastAsyncTlasBuildFence = 0;
+
+static void DrainRendererDirectQueueForLightBufferRealloc();
+
 void BuildAccelerationStructures(
     const std::vector<const Asset::GpuMesh *> &meshes,
     const std::vector<Scene::Instance> &instances) {
@@ -5601,6 +5668,28 @@ void BuildAccelerationStructures(
     fprintf(stderr, "DxrRenderer::BuildAccelerationStructures: srvHeap OK. "
                     "validating meshes...\n");
     fflush(stderr);
+
+    // Decide up front whether BLAS work is needed: geometry buffers changed,
+    // opaque/transparent classification changed, or no BLAS exists yet. When
+    // none of that is true this call is a TLAS-only update (e.g. grass camera
+    // refresh) and takes the async fast path below.
+    std::vector<uint8_t> meshOpaqueStates(meshes.size(), 1u);
+    for (size_t i = 0; i < meshes.size(); ++i) {
+      meshOpaqueStates[i] = IsMeshOpaqueForRt(*meshes[i]) ? 1u : 0u;
+    }
+    bool meshesChanged = (meshes.size() != s_cachedMeshBuffersForBlas.size()) ||
+                         (meshes.size() != s_cachedMeshOpaqueForBlas.size());
+    if (!meshesChanged) {
+      for (size_t i = 0; i < meshes.size(); ++i) {
+        if (meshes[i]->vertexBuffer.Get() != s_cachedMeshBuffersForBlas[i] ||
+            meshOpaqueStates[i] != s_cachedMeshOpaqueForBlas[i]) {
+          meshesChanged = true;
+          break;
+        }
+      }
+    }
+    const bool rebuildingBlas = meshesChanged || s_allBLAS.empty();
+
     for (size_t i = 0; i < meshes.size(); ++i) {
       const auto &m = *meshes[i];
       if (!m.vertexBuffer || !m.indexBuffer) {
@@ -5616,6 +5705,13 @@ void BuildAccelerationStructures(
                 "AS build\n",
                 i);
         return;
+      }
+
+      // VB/IB SRVs in the persistent heap only change with the geometry; on
+      // TLAS-only updates they are already current, so skip the (per-mesh,
+      // per-call) descriptor writes.
+      if (!rebuildingBlas) {
+        continue;
       }
 
       // Create SRVs for VB and IB in our persistent DXR heap
@@ -5706,63 +5802,6 @@ void BuildAccelerationStructures(
       }
     }
 
-    // Wait for GPU (simple sync)
-    const UINT64 fence = s_fenceValues[*s_frameIndexPtr];
-    HRESULT hr = s_commandQueue->Signal(s_fence, fence);
-    if (FAILED(hr)) {
-      fprintf(stderr, "DxrRenderer: Signal before AS build failed: 0x%08x\n",
-              (unsigned)hr);
-    }
-    s_fenceValues[*s_frameIndexPtr]++;
-    if (s_fence->GetCompletedValue() < fence) {
-      s_fence->SetEventOnCompletion(fence, s_fenceEvent);
-      if (WaitForSingleObject(s_fenceEvent, 5000) == WAIT_TIMEOUT) {
-        fprintf(stderr, "DxrRenderer: Timeout waiting for AS build sync (5s). "
-                        "GPU might have hung.\n");
-      }
-    }
-
-    fprintf(stderr, "DxrRenderer: Creating command allocator/list\n");
-    fflush(stderr);
-    // Create command list
-    ComPtr<ID3D12CommandAllocator> cmdAlloc;
-    ComPtr<ID3D12GraphicsCommandList4> cmdList;
-    HRESULT hrAlloc = s_device->CreateCommandAllocator(
-        D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&cmdAlloc));
-    if (FAILED(hrAlloc)) {
-      fprintf(stderr, "DxrRenderer: CreateCommandAllocator failed: 0x%08x\n",
-              (unsigned)hrAlloc);
-      return;
-    }
-    HRESULT hrList = s_device->CreateCommandList(
-        0, D3D12_COMMAND_LIST_TYPE_DIRECT, cmdAlloc.Get(), nullptr,
-        IID_PPV_ARGS(&cmdList));
-    if (FAILED(hrList)) {
-      fprintf(stderr, "DxrRenderer: CreateCommandList failed: 0x%08x\n",
-              (unsigned)hrList);
-      return;
-    }
-
-    // BLAS
-    // Rebuild when geometry buffers change, opaque/transparent material
-    // classification changes, or a material was explicitly marked dirty.
-    std::vector<uint8_t> meshOpaqueStates(meshes.size(), 1u);
-    for (size_t i = 0; i < meshes.size(); ++i) {
-      meshOpaqueStates[i] = IsMeshOpaqueForRt(*meshes[i]) ? 1u : 0u;
-    }
-
-    bool meshesChanged = (meshes.size() != s_cachedMeshBuffersForBlas.size()) ||
-                         (meshes.size() != s_cachedMeshOpaqueForBlas.size());
-    if (!meshesChanged) {
-      for (size_t i = 0; i < meshes.size(); ++i) {
-        if (meshes[i]->vertexBuffer.Get() != s_cachedMeshBuffersForBlas[i] ||
-            meshOpaqueStates[i] != s_cachedMeshOpaqueForBlas[i]) {
-          meshesChanged = true;
-          break;
-        }
-      }
-    }
-
     auto WaitForFenceWithTimeout = [&](UINT64 fenceValue, DWORD timeoutMs,
                                        const char *timeoutMsg) -> bool {
       if (s_fence->GetCompletedValue() >= fenceValue) {
@@ -5775,6 +5814,86 @@ void BuildAccelerationStructures(
       }
       return true;
     };
+
+    ComPtr<ID3D12CommandAllocator> cmdAlloc;
+    ComPtr<ID3D12GraphicsCommandList4> cmdList;
+    if (rebuildingBlas) {
+      // Full rebuild: drain the queue once up front (BLAS builds read live
+      // VB/IB, and compaction needs CPU readback later anyway), then record
+      // on a throwaway allocator/list as before.
+      const UINT64 fence = s_fenceValues[*s_frameIndexPtr];
+      HRESULT hr = s_commandQueue->Signal(s_fence, fence);
+      if (FAILED(hr)) {
+        fprintf(stderr, "DxrRenderer: Signal before AS build failed: 0x%08x\n",
+                (unsigned)hr);
+      }
+      s_fenceValues[*s_frameIndexPtr]++;
+      WaitForFenceWithTimeout(fence, 5000,
+                              "DxrRenderer: Timeout waiting for AS build sync "
+                              "(5s). GPU might have hung.");
+
+      fprintf(stderr, "DxrRenderer: Creating command allocator/list\n");
+      fflush(stderr);
+      HRESULT hrAlloc = s_device->CreateCommandAllocator(
+          D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&cmdAlloc));
+      if (FAILED(hrAlloc)) {
+        fprintf(stderr, "DxrRenderer: CreateCommandAllocator failed: 0x%08x\n",
+                (unsigned)hrAlloc);
+        return;
+      }
+      HRESULT hrList = s_device->CreateCommandList(
+          0, D3D12_COMMAND_LIST_TYPE_DIRECT, cmdAlloc.Get(), nullptr,
+          IID_PPV_ARGS(&cmdList));
+      if (FAILED(hrList)) {
+        fprintf(stderr, "DxrRenderer: CreateCommandList failed: 0x%08x\n",
+                (unsigned)hrList);
+        return;
+      }
+    } else {
+      // TLAS-only fast path: no queue drain. Only guarantee needed before
+      // reusing the persistent allocator/upload buffers (and the grass patch
+      // upload buffer) is that the *previous* async TLAS build finished —
+      // it was submitted ahead of the previous frame's render work, so this
+      // wait is effectively always already satisfied.
+      if (!WaitForFenceWithTimeout(
+              s_lastAsyncTlasBuildFence, 5000,
+              "DxrRenderer: Timeout waiting for previous TLAS update (5s). "
+              "Skipping TLAS update this frame.")) {
+        return;
+      }
+      if (!s_tlasUpdateCmdAlloc) {
+        HRESULT hrAlloc = s_device->CreateCommandAllocator(
+            D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&s_tlasUpdateCmdAlloc));
+        if (FAILED(hrAlloc)) {
+          fprintf(stderr,
+                  "DxrRenderer: CreateCommandAllocator (TLAS update) failed: "
+                  "0x%08x\n",
+                  (unsigned)hrAlloc);
+          return;
+        }
+      }
+      if (!s_tlasUpdateCmdList) {
+        HRESULT hrList = s_device->CreateCommandList(
+            0, D3D12_COMMAND_LIST_TYPE_DIRECT, s_tlasUpdateCmdAlloc.Get(),
+            nullptr, IID_PPV_ARGS(&s_tlasUpdateCmdList));
+        if (FAILED(hrList)) {
+          fprintf(stderr,
+                  "DxrRenderer: CreateCommandList (TLAS update) failed: "
+                  "0x%08x\n",
+                  (unsigned)hrList);
+          return;
+        }
+      } else {
+        // If a previous update threw mid-recording the list is still open;
+        // Close() on an already-closed list just returns an error code.
+        s_tlasUpdateCmdList->Close();
+        ThrowIfFailed(s_tlasUpdateCmdAlloc->Reset());
+        ThrowIfFailed(s_tlasUpdateCmdList->Reset(s_tlasUpdateCmdAlloc.Get(),
+                                                 nullptr));
+      }
+      cmdAlloc = s_tlasUpdateCmdAlloc;
+      cmdList = s_tlasUpdateCmdList;
+    }
 
     // Pipelining:
     // Create separate allocators for each batch so we can submit them without
@@ -5794,7 +5913,7 @@ void BuildAccelerationStructures(
     std::vector<ComPtr<ID3D12CommandAllocator>> submittedBatchAllocators;
     submittedBatchAllocators.push_back(cmdAlloc); // keep alive until fence wait
 
-    if (meshesChanged || s_allBLAS.empty()) {
+    if (rebuildingBlas) {
       s_allBLAS.clear();
       s_cachedMeshBuffersForBlas.clear();
       s_cachedMeshOpaqueForBlas.clear();
@@ -6290,17 +6409,41 @@ void BuildAccelerationStructures(
       }
     }
     const UINT totalCount = (UINT)instanceDescs.size();
+    const UINT64 instanceBytes =
+        (UINT64)totalCount * sizeof(D3D12_RAYTRACING_INSTANCE_DESC);
 
     ComPtr<ID3D12Resource> instanceDescBuffer;
-    AllocateUploadBuffer(s_device, instanceDescs.data(),
-                         (UINT64)totalCount * sizeof(D3D12_RAYTRACING_INSTANCE_DESC),
-                         &instanceDescBuffer, L"TLAS Instance Buffer");
+    D3D12_GPU_VIRTUAL_ADDRESS instanceDescsVA = 0;
+    if (rebuildingBlas) {
+      // Rebuild path is fully fenced below; a throwaway upload buffer is fine.
+      AllocateUploadBuffer(s_device, instanceDescs.data(), instanceBytes,
+                           &instanceDescBuffer, L"TLAS Instance Buffer");
+      instanceDescsVA = instanceDescBuffer->GetGPUVirtualAddress();
+    } else {
+      // Fast path: reuse a persistent upload buffer (previous build already
+      // fenced above) instead of CreateCommittedResource per update.
+      if (!s_tlasInstanceUpload || s_tlasInstanceUploadCapacity < instanceBytes) {
+        const UINT64 newCapacity =
+            (std::max)(instanceBytes * 2, (UINT64)64 * 1024);
+        s_tlasInstanceUpload.Reset();
+        AllocateUploadBuffer(s_device, nullptr, newCapacity,
+                             &s_tlasInstanceUpload,
+                             L"TLAS Instance Buffer (persistent)");
+        s_tlasInstanceUploadCapacity = newCapacity;
+      }
+      void *mappedInstances = nullptr;
+      D3D12_RANGE readRange = {0, 0};
+      ThrowIfFailed(s_tlasInstanceUpload->Map(0, &readRange, &mappedInstances));
+      memcpy(mappedInstances, instanceDescs.data(), (size_t)instanceBytes);
+      s_tlasInstanceUpload->Unmap(0, nullptr);
+      instanceDescsVA = s_tlasInstanceUpload->GetGPUVirtualAddress();
+    }
 
     D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS inputs = {};
     inputs.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL;
     inputs.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY;
     inputs.NumDescs = totalCount;
-    inputs.InstanceDescs = instanceDescBuffer->GetGPUVirtualAddress();
+    inputs.InstanceDescs = instanceDescsVA;
 
     bool canRefitTlas =
         !meshesChanged && s_tlasSupportsUpdate && s_tlas.result &&
@@ -6331,13 +6474,24 @@ void BuildAccelerationStructures(
           Align(info.ResultDataMaxSizeInBytes,
                 D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BYTE_ALIGNMENT);
 
-      if (!s_tlas.scratch || s_tlas.scratchSizeInBytes < requiredScratchSize) {
+      const bool needScratchRealloc =
+          !s_tlas.scratch || s_tlas.scratchSizeInBytes < requiredScratchSize;
+      const bool needResultRealloc =
+          !s_tlas.result || s_tlas.resultSizeInBytes < requiredResultSize;
+      if (!rebuildingBlas && (needScratchRealloc || needResultRealloc)) {
+        // The TLAS GPUVA is bound as a root SRV (no D3D12 lifetime tracking),
+        // so releasing it while prior frames are in flight reads freed memory.
+        // This realloc only happens when the instance count outgrows the
+        // buffers — rare — so pay the full drain just here.
+        DrainRendererDirectQueueForLightBufferRealloc();
+      }
+      if (needScratchRealloc) {
         s_tlas.scratch.Reset();
         AllocateUAVBuffer(s_device, requiredScratchSize, &s_tlas.scratch,
                           D3D12_RESOURCE_STATE_COMMON, L"TLAS Scratch");
         s_tlas.scratchSizeInBytes = requiredScratchSize;
       }
-      if (!s_tlas.result || s_tlas.resultSizeInBytes < requiredResultSize) {
+      if (needResultRealloc) {
         s_tlas.result.Reset();
         AllocateUAVBuffer(
             s_device, requiredResultSize, &s_tlas.result,
@@ -6372,14 +6526,21 @@ void BuildAccelerationStructures(
     ID3D12CommandList *lists[] = {cmdList.Get()};
     s_commandQueue->ExecuteCommandLists(1, lists);
 
-    // Wait for finish
     const UINT64 fence2 = s_fenceValues[*s_frameIndexPtr];
     s_commandQueue->Signal(s_fence, fence2);
     s_fenceValues[*s_frameIndexPtr]++;
-    if (!WaitForFenceWithTimeout(
-            fence2, 5000,
-            "DxrRenderer: Timeout waiting for TLAS build (5s). Keeping previous AS state for this frame.")) {
-      return;
+    if (rebuildingBlas) {
+      // Wait for finish: rebuild path uses throwaway upload/scratch locals.
+      if (!WaitForFenceWithTimeout(
+              fence2, 5000,
+              "DxrRenderer: Timeout waiting for TLAS build (5s). Keeping previous AS state for this frame.")) {
+        return;
+      }
+    } else {
+      // Async: the direct queue orders this build before any later
+      // DispatchRays, so no CPU wait is needed. The fence is checked before
+      // the persistent context is reused on the next TLAS-only update.
+      s_lastAsyncTlasBuildFence = fence2;
     }
     if (g_verboseRenderLogs) {
       fprintf(stderr, "DxrRenderer: Acceleration structures %s\n",
@@ -7263,6 +7424,8 @@ GpuMemoryBreakdown GetGpuMemoryBreakdown() {
   addResource(s_wavefrontPathQueueBBuffer.Get(),
               breakdown.wavefrontQueueBytes);
   addResource(s_wavefrontHitQueueBuffer.Get(), breakdown.wavefrontQueueBytes);
+  addResource(s_wavefrontGuideQueueBuffer.Get(),
+              breakdown.wavefrontQueueBytes);
   addResource(s_wavefrontShadowQueueBuffer.Get(),
               breakdown.wavefrontQueueBytes);
   addResource(s_wavefrontDispatchArgsBuffer.Get(),

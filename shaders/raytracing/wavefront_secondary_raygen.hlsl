@@ -9,7 +9,6 @@ static RayPayload InitWavefrontSecondaryPayload(uint rayType)
     payload.packedNormal = PackNormalOctahedron(float3(0.0, 1.0, 0.0));
     payload.packedAlbedo = PackPayloadAlbedo(float3(0.0, 0.0, 0.0));
     payload.packedSurface = PackPayloadSurface(1.0, 0.0, 0.0, 0.0);
-    payload.surface = float4(1.0, 0.0, 0.0, 0.0);
     payload.packedIorType = PackPayloadIorType(1.0, rayType, false, 1.0);
     payload.packedTransmission = PackPayloadTransmissionColor(float3(1.0, 1.0, 1.0));
     payload.packedSpecular = PackPayloadSpecularColor(float3(1.0, 1.0, 1.0));
@@ -114,28 +113,19 @@ void WavefrontSecondaryRayGen()
     record.packedTransmission = payload.packedTransmission;
     record.packedSpecular = payload.packedSpecular;
     record.packedState = state.packedState;
+    const float4 payloadSurface = UnpackPayloadSurface(payload.packedSurface);
     record.reserved = WavefrontApplyParallaxSelfShadowToSortKey(
         WavefrontPackMaterialSortKey(
             rayType,
-            WavefrontClassifyMaterialBinFromSurface(payload.surface,
+            WavefrontClassifyMaterialBinFromSurface(payloadSurface,
                                                     payload.packedIorType,
                                                     payload.packedColor0,
                                                     payload.packedColor1),
             0u),
         payload.packedParallaxSelfShadow / 255.0);
-    record.surface = payload.surface;
-    record.guideOrigin = state.origin;
-    record.guidePackedState = (payload.t < 0.0) ? WAVEFRONT_GUIDE_STATE_MISS : 0u;
-    record.guideDirection = traceDirection;
-    record.guideHitT = payload.t;
-    record.guidePackedNormal = payload.packedNormal;
-    record.guidePackedAlbedo = payload.packedAlbedo;
-    record.guidePackedIorType = payload.packedIorType;
-    record.guidePackedTransmission = payload.packedTransmission;
-    record.guidePackedSpecular = payload.packedSpecular;
-    record.guideReserved0 = 0u;
-    record.guideReserved1 = 0u;
-    record.guideSurface = payload.surface;
+    record.surface = payloadSurface;
+    // No guide write: guide records are a primary-bounce/RR concept and the
+    // secondary resolve never reads them.
 
     const bool isMiss = (payload.t < 0.0);
     if (isMiss) {

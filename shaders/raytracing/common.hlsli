@@ -625,9 +625,10 @@ struct WavefrontPathState
     uint packedState;
 };
 
-static const uint WAVEFRONT_ABI_VERSION = 5u;
+static const uint WAVEFRONT_ABI_VERSION = 6u;
 static const uint WAVEFRONT_PATH_STATE_DWORDS = 12u;
-static const uint WAVEFRONT_HIT_RECORD_DWORDS = 34u;
+static const uint WAVEFRONT_HIT_RECORD_DWORDS = 15u;
+static const uint WAVEFRONT_GUIDE_RECORD_DWORDS = 17u;
 static const uint WAVEFRONT_SHADOW_TASK_DWORDS = 12u;
 static const uint WAVEFRONT_DISPATCH_ARGS_DWORDS = 4u;
 static const uint WAVEFRONT_QUEUE_PATH_A = 0u;
@@ -652,6 +653,15 @@ struct WavefrontHitRecord
     uint packedState;
     uint reserved;
     float4 surface;
+};
+
+// DLSS-RR guide data, split out of WavefrontHitRecord into its own queue
+// (same index as the hit record). Only the primary raygen writes it — and
+// only when RR or the primary-guide feature is active — and only the primary
+// resolve's RR block reads it. Keeping it out of the hit record halves the
+// hit-queue traffic for every secondary/GI ray.
+struct WavefrontGuideRecord
+{
     float3 guideOrigin;
     uint guidePackedState;
     float3 guideDirection;
@@ -661,8 +671,6 @@ struct WavefrontHitRecord
     uint guidePackedIorType;
     uint guidePackedTransmission;
     uint guidePackedSpecular;
-    uint guideReserved0;
-    uint guideReserved1;
     float4 guideSurface;
 };
 
@@ -707,6 +715,7 @@ RWStructuredBuffer<WavefrontDispatchArgs> g_wavefrontDispatchArgs : register(u30
 RWStructuredBuffer<uint> g_wavefrontStats : register(u31);
 RWStructuredBuffer<uint4> g_wavefrontReserved : register(u32);
 RWStructuredBuffer<uint> g_wavefrontMaterialBinIndices : register(u33);
+RWStructuredBuffer<WavefrontGuideRecord> g_wavefrontGuideQueue : register(u37);
 
 static const uint WAVEFRONT_RESERVED_SECONDARY_DISPATCH_CONFIG_INDEX = 6u;
 static const uint WAVEFRONT_QUEUE_FLAG_SOURCE_IS_A = 0x1u;
@@ -749,11 +758,10 @@ struct RayPayload
     uint packedColor1;    // B as fp16 (low 16 bits)
     uint packedNormal;    // Octahedral packed normal
     uint packedAlbedo;    // 3x8 UNORM base color
-    uint packedSurface;   // 4x8 UNORM: roughness/metallic/transmission/translucency
     uint packedIorType;   // 16-bit half IOR + 8-bit rayType + thin-walled bit
     uint packedTransmission; // 3x8 UNORM transmission color
     uint packedSpecular;  // 3x8 UNORM specular color
-    float4 surface;       // full precision: roughness/metallic/transmission/translucency
+    uint2 packedSurface;  // 4x fp16: roughness/metallic/transmission/translucency
     uint packedParallaxSelfShadow; // 8-bit sun self-shadow for wavefront direct lighting
 };
 
@@ -818,7 +826,7 @@ inline bool WavefrontHitRecordIsMiss(WavefrontHitRecord record)
            record.hitT < 0.0;
 }
 
-inline bool WavefrontHitRecordGuideIsMiss(WavefrontHitRecord record)
+inline bool WavefrontGuideRecordIsMiss(WavefrontGuideRecord record)
 {
     return (record.guidePackedState & WAVEFRONT_GUIDE_STATE_MISS) != 0u ||
            record.guideHitT < 0.0;
@@ -863,21 +871,21 @@ inline float UnpackPayloadCoatWeight(uint packed)
     return ((packed >> 24) & 0xFFu) / 255.0;
 }
 
-inline uint PackPayloadSurface(float roughness, float metallic,
-                               float transmission, float translucency)
+// Surface params (roughness/metallic/transmission/translucency) travel in the
+// payload as 4x fp16 in two dwords. fp16 is ample precision for these and
+// keeps the payload at 44 bytes; the WavefrontHitRecord still stores the
+// unpacked float4 so the resolve-pass ABI is unchanged.
+inline uint2 PackPayloadSurface(float roughness, float metallic,
+                                float transmission, float translucency)
 {
-    uint4 q = (uint4)round(saturate(float4(roughness, metallic, transmission, translucency)) * 255.0);
-    return (q.x) | (q.y << 8) | (q.z << 16) | (q.w << 24);
+    return uint2(f32tof16(roughness) | (f32tof16(metallic) << 16),
+                 f32tof16(transmission) | (f32tof16(translucency) << 16));
 }
 
-inline float4 UnpackPayloadSurface(uint packed)
+inline float4 UnpackPayloadSurface(uint2 packed)
 {
-    float4 q = float4(
-        (packed) & 0xFFu,
-        (packed >> 8) & 0xFFu,
-        (packed >> 16) & 0xFFu,
-        (packed >> 24) & 0xFFu);
-    return q / 255.0;
+    return float4(f16tof32(packed.x & 0xFFFFu), f16tof32(packed.x >> 16),
+                  f16tof32(packed.y & 0xFFFFu), f16tof32(packed.y >> 16));
 }
 
 inline float4 WavefrontHitRecordSurface(WavefrontHitRecord record)
@@ -885,7 +893,7 @@ inline float4 WavefrontHitRecordSurface(WavefrontHitRecord record)
     return saturate(record.surface);
 }
 
-inline float4 WavefrontHitRecordGuideSurface(WavefrontHitRecord record)
+inline float4 WavefrontGuideRecordSurface(WavefrontGuideRecord record)
 {
     return saturate(record.guideSurface);
 }
@@ -1505,7 +1513,6 @@ inline RayPayload InitRayPayload(uint rayType)
     p.packedTransmission =
         PackPayloadTransmissionColor(float3(1.0, 1.0, 1.0));
     p.packedSpecular = PackPayloadSpecularColor(float3(1.0, 1.0, 1.0));
-    p.surface = float4(1.0, 0.0, 0.0, 0.0);
     p.packedParallaxSelfShadow = PackWavefrontParallaxSelfShadow(1.0);
     return p;
 }

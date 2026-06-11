@@ -44,7 +44,7 @@ inline void TracePrimaryGuide(float3 initialOrigin,
             return;
         }
 
-        const float4 surface = saturate(payload.surface);
+        const float4 surface = saturate(UnpackPayloadSurface(payload.packedSurface));
         const float roughness = max(0.001, surface.x);
         const float transmission = surface.z;
         const float ior = UnpackPayloadIor(payload.packedIorType);
