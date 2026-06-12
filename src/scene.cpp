@@ -2749,9 +2749,10 @@ bool AddImportedNode(ImportedNodePayload payload, size_t *outNodeIndex) {
   // are not real files on disk.
   if (!payload.skipLibraryRegister && !isLiveLinkPayload &&
       !payload.sourcePath.empty()) {
-    std::error_code regEc;
-    if (std::filesystem::exists(std::filesystem::path(payload.sourcePath),
-                                regEc)) {
+    // sourcePath is UTF-8; fs::path(std::string) would interpret it in the
+    // local code page and silently fail exists() for non-ASCII paths (e.g.
+    // Turkish characters), skipping library registration entirely.
+    if (StoredPathExists(payload.sourcePath)) {
       std::string libName =
           payload.displayName.empty()
               ? std::filesystem::path(payload.sourcePath).stem().string()

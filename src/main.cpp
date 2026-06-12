@@ -1,4 +1,6 @@
 #include "ImGuizmo.h"
+#include "asset_library/global_registry.h"
+#include "asset_library/import_hook.h"
 #include "assets/asset_loader.h"
 #include "clouds.h" // Add clouds
 #include "d3d12_helpers.h"
@@ -2482,6 +2484,19 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
 
   fprintf(stderr, "InitApplication returned OK\n");
 #endif
+
+  // Source recooks can enter importer paths that use the asset loader's D3D12
+  // device. Start recovery only after InitApplication has initialized that
+  // runtime; MainWindow construction is intentionally earlier than D3D setup.
+  if (assetlib::GlobalRegistry()) {
+    const assetlib::ResumeCookStats resume = assetlib::ResumePendingCooks();
+    if (resume.adopted || resume.requeued || resume.missing) {
+      fprintf(stderr,
+              "AssetLibrary: cook resume - %zu adopted, %zu recook job(s) "
+              "queued, %zu flagged missing\n",
+              resume.adopted, resume.requeued, resume.missing);
+    }
+  }
 
   // Scene Setup
   if (!sceneToLoad.empty()) {

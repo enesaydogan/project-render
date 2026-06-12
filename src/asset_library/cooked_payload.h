@@ -90,6 +90,14 @@ bool WriteCookedFile(const std::filesystem::path &path,
 bool ReadCookedFile(const std::filesystem::path &path,
                     std::vector<uint8_t> &out);
 
+// Cheap validity probe for a cooked payload file: checks the 16-byte header
+// (magic + cooker version) without reading or decompressing the body. Used by
+// the startup resume scan to adopt cooks that finished writing before an app
+// exit. WriteCookedFile is atomic, so a header-valid file is a complete file.
+enum class CookedPayloadKind : uint32_t { Model, Texture, Volume };
+bool ValidateCookedFileHeader(const std::filesystem::path &path,
+                              CookedPayloadKind kind);
+
 // FNV-1a 64-bit content hashes used for cache keys / change detection.
 uint64_t HashBytes(const void *data, size_t size);
 // Hashes file contents in a streaming fashion. Returns 0 if unreadable.

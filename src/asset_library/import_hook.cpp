@@ -29,8 +29,7 @@ AssetId FindUpToDateModel(const AssetRegistry &registry, const AssetPaths &paths
   if (sourcePath.empty())
     return {};
   std::error_code ec;
-  auto ts = std::filesystem::last_write_time(
-      std::filesystem::path(sourcePath), ec);
+  auto ts = std::filesystem::last_write_time(NativeSourcePath(sourcePath), ec);
   int64_t timestamp = ec ? 0 : static_cast<int64_t>(ts.time_since_epoch().count());
   for (const AssetId &id : registry.AllAssets()) {
     const AssetMetadata *m = registry.Get(id);
@@ -99,7 +98,8 @@ std::filesystem::path SequenceSourcePath(const VdbSequence &sequence,
   std::ostringstream number;
   number << std::setw(static_cast<int>(sequence.padding))
          << std::setfill('0') << (sequence.firstFrame + frameIndex);
-  return std::filesystem::path(sequence.directory) /
+  // directory comes from UTF-8 registry JSON; convert before path use.
+  return NativeSourcePath(sequence.directory) /
          (sequence.prefix + number.str() + sequence.suffix);
 }
 
@@ -468,6 +468,229 @@ AssetId ImportVdbFileToLibrary(const std::string &path,
   registry->TouchRecent(id);
   registry->Save();
   return id;
+}
+
+namespace {
+
+// Enqueue a background recook of one asset from its source file. The produce
+// lambda runs on the cook worker and must not touch the registry; it captures
+// everything it needs by value (same contract as the import-time cooks).
+void EnqueueRecookFromSource(const AssetPaths &paths, const AssetId &id,
+                             AssetType type, const std::string &sourcePath,
+                             const std::string &importSettingsJson) {
+  CookService &cook = CookService::Get();
+  switch (type) {
+  case AssetType::Model:
+    cook.Enqueue(id, paths.cookedMeshPath(id), [sourcePath]() {
+      const bool prevDefer = Asset::GetDeferGpuUpload();
+      Asset::SetDeferGpuUpload(true);
+      std::vector<Asset::GpuMesh> meshes;
+      const bool loaded = Asset::LoadModel(sourcePath, meshes);
+      Asset::SetDeferGpuUpload(prevDefer);
+      std::vector<uint8_t> blob;
+      if (loaded && !meshes.empty())
+        SerializeCookedModel(ToCookedModel(meshes), blob);
+      return blob;
+    });
+    break;
+  case AssetType::Texture: {
+    const std::string ext = LowerExt(sourcePath);
+    const bool isHdr = (ext == "hdr" || ext == "exr");
+    cook.Enqueue(id, paths.cookedTexturePath(id), [sourcePath, isHdr]() {
+      Asset::Texture tex = Asset::LoadTextureFromFile(sourcePath, isHdr);
+      std::vector<uint8_t> blob;
+      if (tex.width > 0 && !tex.cpuData.empty())
+        SerializeCookedTexture(ToCookedTexture(tex), blob);
+      return blob;
+    });
+    break;
+  }
+  case AssetType::Volume: {
+    VdbImport::ImportOptions options;
+    try {
+      const json settings = json::parse(importSettingsJson);
+      options.densityGrid = settings.value("densityGrid", std::string());
+      options.temperatureGrid =
+          settings.value("temperatureGrid", std::string());
+    } catch (...) {
+    }
+    cook.Enqueue(id, paths.cookedVolumePath(id), [sourcePath, options]() {
+      CookedVolume cooked;
+      std::string error;
+      std::vector<uint8_t> blob;
+      if (VdbImport::ImportVdbToVolume(sourcePath, options, cooked, &error)) {
+        SerializeCookedVolume(cooked, blob);
+      } else if (!error.empty()) {
+        fprintf(stderr, "Volume recook failed for '%s': %s\n",
+                sourcePath.c_str(), error.c_str());
+      }
+      return blob;
+    });
+    break;
+  }
+  default:
+    break;
+  }
+}
+
+} // namespace
+
+ResumeCookStats ResumePendingCooks() {
+  ResumeCookStats stats;
+  AssetRegistry *registry = GlobalRegistry();
+  if (!registry)
+    return stats;
+  CookService &cook = CookService::Get();
+  const AssetPaths &paths = registry->paths();
+  registry->RefreshSourceStates();
+  bool changed = false;
+
+  for (const AssetId &id : registry->AllAssets()) {
+    const AssetMetadata *meta = registry->Get(id);
+    if (!meta || meta->fromPack)
+      continue;
+    if (cook.IsPending(id))
+      continue;
+
+    // Per-type cooked payload path + cheap header validation. Material
+    // payloads are plain JSON (no header), so existence is the check.
+    std::filesystem::path cookedPath;
+    bool fileValid = false;
+    uint32_t expectedVersion = 0;
+    std::error_code ec;
+    switch (meta->type) {
+    case AssetType::Model:
+      cookedPath = paths.cookedMeshPath(id);
+      expectedVersion = kCookerVersionMesh;
+      fileValid =
+          ValidateCookedFileHeader(cookedPath, CookedPayloadKind::Model);
+      break;
+    case AssetType::Texture:
+      cookedPath = paths.cookedTexturePath(id);
+      expectedVersion = kCookerVersionTexture;
+      fileValid =
+          ValidateCookedFileHeader(cookedPath, CookedPayloadKind::Texture);
+      break;
+    case AssetType::Material:
+      cookedPath = paths.cookedMaterialPath(id);
+      expectedVersion = kCookerVersionTexture; // matches CookAndRegisterMaterial
+      fileValid = std::filesystem::exists(cookedPath, ec) && !ec;
+      break;
+    case AssetType::Volume:
+      cookedPath = paths.cookedVolumePath(id);
+      expectedVersion = kCookerVersionVolume;
+      fileValid =
+          ValidateCookedFileHeader(cookedPath, CookedPayloadKind::Volume);
+      break;
+    default:
+      continue; // registry-only entry types have no cooked payload
+    }
+
+    if (meta->cookState == CookState::Current && fileValid)
+      continue; // healthy
+
+    // Volume sequences manage one cooked file per frame; reuse the
+    // sequence-aware path (adopts complete sequences, cooks only the
+    // missing frames).
+    if (meta->type == AssetType::Volume) {
+      VdbSequence sequence;
+      VdbImport::ImportOptions seqOptions;
+      if (ParseVdbSequenceSettings(*meta, sequence, seqOptions)) {
+        if (SequenceCookComplete(paths, id, sequence)) {
+          AssetMetadata updated = *meta;
+          updated.cookState = CookState::Current;
+          registry->Update(updated);
+          stats.adopted++;
+          changed = true;
+        } else {
+          std::error_code seqEc;
+          const bool sourceOk =
+              std::filesystem::exists(SequenceSourcePath(sequence, 0),
+                                      seqEc) &&
+              !seqEc;
+          if (sourceOk) {
+            QueueVdbSequenceCook(*registry, id, sequence, seqOptions, false);
+            stats.requeued++;
+          } else if (meta->cookState != CookState::Failed) {
+            AssetMetadata updated = *meta;
+            updated.cookState = CookState::Failed;
+            registry->Update(updated);
+            stats.missing++;
+            changed = true;
+            fprintf(stderr,
+                    "AssetLibrary: '%s' sequence frames and source are both "
+                    "missing - flagged\n",
+                    meta->displayName.c_str());
+          }
+        }
+        continue;
+      }
+    }
+
+    // 1) Adopt: the cook finished writing before exit but the registry never
+    //    flipped to Current (the flip happens on the main thread via Pump).
+    //    WriteCookedFile is atomic, so a header-valid file is complete.
+    if (fileValid && (meta->cookState == CookState::Stale ||
+                      meta->cookState == CookState::NotCooked)) {
+      AssetMetadata updated = *meta;
+      updated.cookState = CookState::Current;
+      updated.cookerVersion = expectedVersion;
+      registry->Update(updated);
+      stats.adopted++;
+      changed = true;
+      continue;
+    }
+
+    // 2) Recook from the source file when it is reachable. Materials have no
+    //    standalone source (their payload derives from the model import), so
+    //    they are excluded here.
+    const bool sourceAvailable =
+        !meta->sourcePath.empty() &&
+        std::filesystem::exists(NativeSourcePath(meta->sourcePath), ec) && !ec;
+    if (sourceAvailable && meta->type != AssetType::Material) {
+      AssetMetadata updated = *meta;
+      updated.cookState = CookState::Stale;
+      registry->Update(updated);
+      changed = true;
+      EnqueueRecookFromSource(paths, id, meta->type, meta->sourcePath,
+                              meta->importSettingsJson);
+      stats.requeued++;
+      continue;
+    }
+
+    // 3) No source, but a version-valid payload exists (e.g. Failed left over
+    //    from an old recook attempt, or a material whose JSON survived). The
+    //    payload is the only copy of the data — adopt it.
+    if (fileValid) {
+      AssetMetadata updated = *meta;
+      updated.cookState = CookState::Current;
+      updated.cookerVersion = expectedVersion;
+      registry->Update(updated);
+      stats.adopted++;
+      changed = true;
+      continue;
+    }
+
+    // 4) No payload and no reachable source: flag as missing. sourceState was
+    //    refreshed above (Missing when a path is recorded but absent).
+    if (meta->cookState != CookState::Failed) {
+      AssetMetadata updated = *meta;
+      updated.cookState = CookState::Failed;
+      registry->Update(updated);
+      changed = true;
+    }
+    stats.missing++;
+    fprintf(stderr,
+            "AssetLibrary: '%s' has no cooked payload and its source %s - "
+            "flagged as missing\n",
+            meta->displayName.c_str(),
+            meta->sourcePath.empty() ? "was never recorded"
+                                     : "file is missing");
+  }
+
+  if (changed)
+    registry->Save();
+  return stats;
 }
 
 bool EnsureVdbSequenceCooked(const AssetId &id) {

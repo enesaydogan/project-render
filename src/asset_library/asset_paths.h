@@ -61,4 +61,11 @@ private:
   std::filesystem::path m_root;
 };
 
+// Convert a stored source-path string (UTF-8, with legacy ANSI fallback) to a
+// usable filesystem path. On Windows, fs::path(std::string) interprets narrow
+// strings in the local code page, which silently breaks non-ASCII UTF-8 paths:
+// exists() returns false, timestamps/hashes read as 0. Every assetlib site
+// that touches AssetMetadata::sourcePath must go through this.
+std::filesystem::path NativeSourcePath(const std::string &storedPath);
+
 } // namespace assetlib

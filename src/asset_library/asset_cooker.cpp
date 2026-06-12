@@ -19,7 +19,7 @@ namespace {
 
 int64_t FileTimestamp(const std::string &path) {
   std::error_code ec;
-  auto t = std::filesystem::last_write_time(std::filesystem::path(path), ec);
+  auto t = std::filesystem::last_write_time(NativeSourcePath(path), ec);
   if (ec)
     return 0;
   return static_cast<int64_t>(t.time_since_epoch().count());
@@ -200,7 +200,8 @@ RegisterAndCookImport(AssetRegistry &registry, const AssetPaths &paths,
   model.displayName = displayName;
   model.virtualPath = "Imported/Models";
   model.sourcePath = sourcePath;
-  model.sourceContentHash = sourcePath.empty() ? 0 : HashFile(sourcePath);
+  model.sourceContentHash =
+      sourcePath.empty() ? 0 : HashFile(NativeSourcePath(sourcePath));
   model.sourceTimestamp = sourcePath.empty() ? 0 : FileTimestamp(sourcePath);
   model.cookerVersion = kCookerVersionMesh;
   model.dependencies = set.materialIds;
@@ -226,7 +227,8 @@ AssetId RegisterAndCookTexture(AssetRegistry &registry, const AssetPaths &paths,
   m.displayName = displayName;
   m.virtualPath = "Imported/Textures";
   m.sourcePath = sourcePath;
-  m.sourceContentHash = sourcePath.empty() ? 0 : HashFile(sourcePath);
+  m.sourceContentHash =
+      sourcePath.empty() ? 0 : HashFile(NativeSourcePath(sourcePath));
   m.sourceTimestamp = sourcePath.empty() ? 0 : FileTimestamp(sourcePath);
   m.cookerVersion = kCookerVersionTexture;
   m.cookState = CookState::Stale;
@@ -250,7 +252,8 @@ AssetId RegisterAndCookVolume(AssetRegistry &registry, const AssetPaths &paths,
   m.displayName = displayName;
   m.virtualPath = "Imported/Volumes";
   m.sourcePath = sourcePath;
-  m.sourceContentHash = sourcePath.empty() ? 0 : HashFile(sourcePath);
+  m.sourceContentHash =
+      sourcePath.empty() ? 0 : HashFile(NativeSourcePath(sourcePath));
   m.sourceTimestamp = sourcePath.empty() ? 0 : FileTimestamp(sourcePath);
   m.cookerVersion = kCookerVersionVolume;
   m.cookState = CookState::Stale;
@@ -305,7 +308,7 @@ bool RecookVolumeFromSource(AssetRegistry &registry, const AssetPaths &paths,
   if (!meta || meta->type != AssetType::Volume || meta->sourcePath.empty())
     return false;
   std::error_code ec;
-  if (!std::filesystem::exists(std::filesystem::path(meta->sourcePath), ec))
+  if (!std::filesystem::exists(NativeSourcePath(meta->sourcePath), ec))
     return false;
 
   VdbImport::ImportOptions options;
@@ -329,7 +332,7 @@ bool RecookVolumeFromSource(AssetRegistry &registry, const AssetPaths &paths,
   AssetMetadata updated = *registry.Get(volumeId);
   updated.cookState = ok ? CookState::Current : CookState::Failed;
   updated.cookerVersion = kCookerVersionVolume;
-  updated.sourceContentHash = HashFile(meta->sourcePath);
+  updated.sourceContentHash = HashFile(NativeSourcePath(meta->sourcePath));
   updated.sourceTimestamp = FileTimestamp(meta->sourcePath);
   if (ok) {
     updated.cookedPayloadHash = HashBytes(blob.data(), blob.size());
@@ -362,7 +365,7 @@ bool RecookModelFromSource(AssetRegistry &registry, const AssetPaths &paths,
   if (!meta || meta->type != AssetType::Model || meta->sourcePath.empty())
     return false;
   std::error_code ec;
-  if (!std::filesystem::exists(std::filesystem::path(meta->sourcePath), ec))
+  if (!std::filesystem::exists(NativeSourcePath(meta->sourcePath), ec))
     return false;
 
   // Re-decode geometry on the calling (worker) thread without GPU upload.
@@ -386,7 +389,7 @@ bool RecookModelFromSource(AssetRegistry &registry, const AssetPaths &paths,
   AssetMetadata updated = *registry.Get(modelId);
   updated.cookState = ok ? CookState::Current : CookState::Failed;
   updated.cookerVersion = kCookerVersionMesh;
-  updated.sourceContentHash = HashFile(meta->sourcePath);
+  updated.sourceContentHash = HashFile(NativeSourcePath(meta->sourcePath));
   updated.sourceTimestamp = FileTimestamp(meta->sourcePath);
   if (ok && !blob.empty())
     updated.cookedPayloadHash = HashBytes(blob.data(), blob.size());

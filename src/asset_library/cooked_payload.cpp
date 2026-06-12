@@ -419,6 +419,41 @@ bool ReadCookedFile(const std::filesystem::path &path,
   return static_cast<bool>(in);
 }
 
+bool ValidateCookedFileHeader(const std::filesystem::path &path,
+                              CookedPayloadKind kind) {
+  const uint8_t *magic = nullptr;
+  uint32_t expectedVersion = 0;
+  switch (kind) {
+  case CookedPayloadKind::Model:
+    magic = kMagicModel;
+    expectedVersion = kCookerVersionMesh;
+    break;
+  case CookedPayloadKind::Texture:
+    magic = kMagicTexture;
+    expectedVersion = kCookerVersionTexture;
+    break;
+  case CookedPayloadKind::Volume:
+    magic = kMagicVolume;
+    expectedVersion = kCookerVersionVolume;
+    break;
+  }
+  if (!magic)
+    return false;
+
+  std::ifstream in(path, std::ios::binary);
+  if (!in)
+    return false;
+  uint8_t header[16] = {};
+  in.read(reinterpret_cast<char *>(header), sizeof(header));
+  if (in.gcount() != static_cast<std::streamsize>(sizeof(header)))
+    return false;
+  if (std::memcmp(header, magic, 4) != 0)
+    return false;
+  uint32_t version = 0;
+  std::memcpy(&version, header + 4, 4);
+  return version == expectedVersion;
+}
+
 uint64_t HashBytes(const void *data, size_t size) {
   const uint8_t *p = static_cast<const uint8_t *>(data);
   uint64_t h = 1469598103934665603ULL; // FNV offset basis

@@ -462,7 +462,7 @@ void AssetRegistry::RefreshSourceStates() {
     AssetMetadata &m = kv.second;
     if (m.sourcePath.empty()) {
       m.sourceState = SourceState::None;
-    } else if (std::filesystem::exists(std::filesystem::path(m.sourcePath), ec)) {
+    } else if (std::filesystem::exists(NativeSourcePath(m.sourcePath), ec)) {
       m.sourceState = SourceState::Available;
     } else {
       m.sourceState = SourceState::Missing;
