@@ -761,7 +761,7 @@ struct RayPayload
     uint packedIorType;   // 16-bit half IOR + 8-bit rayType + thin-walled bit
     uint packedTransmission; // 3x8 UNORM transmission color
     uint packedSpecular;  // 3x8 UNORM specular color
-    uint2 packedSurface;  // 4x fp16: roughness/metallic/transmission/translucency
+    float4 surface;       // roughness/metallic/transmission/translucency
     uint packedParallaxSelfShadow; // 8-bit sun self-shadow for wavefront direct lighting
 };
 
@@ -871,21 +871,10 @@ inline float UnpackPayloadCoatWeight(uint packed)
     return ((packed >> 24) & 0xFFu) / 255.0;
 }
 
-// Surface params (roughness/metallic/transmission/translucency) travel in the
-// payload as 4x fp16 in two dwords. fp16 is ample precision for these and
-// keeps the payload at 44 bytes; the WavefrontHitRecord still stores the
-// unpacked float4 so the resolve-pass ABI is unchanged.
-inline uint2 PackPayloadSurface(float roughness, float metallic,
-                                float transmission, float translucency)
+inline float4 MakePayloadSurface(float roughness, float metallic,
+                                 float transmission, float translucency)
 {
-    return uint2(f32tof16(roughness) | (f32tof16(metallic) << 16),
-                 f32tof16(transmission) | (f32tof16(translucency) << 16));
-}
-
-inline float4 UnpackPayloadSurface(uint2 packed)
-{
-    return float4(f16tof32(packed.x & 0xFFFFu), f16tof32(packed.x >> 16),
-                  f16tof32(packed.y & 0xFFFFu), f16tof32(packed.y >> 16));
+    return saturate(float4(roughness, metallic, transmission, translucency));
 }
 
 inline float4 WavefrontHitRecordSurface(WavefrontHitRecord record)
@@ -1508,7 +1497,7 @@ inline RayPayload InitRayPayload(uint rayType)
     PayloadSetColor(p, float3(0.0, 0.0, 0.0));
     p.packedNormal = PackNormalOctahedron(float3(0.0, 1.0, 0.0));
     p.packedAlbedo = PackPayloadAlbedo(float3(0.0, 0.0, 0.0));
-    p.packedSurface = PackPayloadSurface(1.0, 0.0, 0.0, 0.0);
+    p.surface = MakePayloadSurface(1.0, 0.0, 0.0, 0.0);
     p.packedIorType = PackPayloadIorType(1.0, rayType, false, 1.0);
     p.packedTransmission =
         PackPayloadTransmissionColor(float3(1.0, 1.0, 1.0));

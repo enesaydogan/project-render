@@ -79,7 +79,7 @@ void WavefrontPrimaryRayGen()
     record.packedTransmission = payload.packedTransmission;
     record.packedSpecular = payload.packedSpecular;
     record.packedState = state.packedState;
-    const float4 payloadSurface = UnpackPayloadSurface(payload.packedSurface);
+    const float4 payloadSurface = payload.surface;
     record.reserved = WavefrontApplyParallaxSelfShadowToSortKey(
         WavefrontPackMaterialSortKey(
             currentRayType,
@@ -104,7 +104,7 @@ void WavefrontPrimaryRayGen()
         guideRecord.guidePackedIorType = guidePayload.packedIorType;
         guideRecord.guidePackedTransmission = guidePayload.packedTransmission;
         guideRecord.guidePackedSpecular = guidePayload.packedSpecular;
-        guideRecord.guideSurface = UnpackPayloadSurface(guidePayload.packedSurface);
+        guideRecord.guideSurface = guidePayload.surface;
         g_wavefrontGuideQueue[pathIndex] = guideRecord;
     }
 

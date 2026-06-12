@@ -736,7 +736,13 @@ struct MeshBLAS {
 };
 static std::vector<MeshBLAS> s_allBLAS;
 static AccelerationStructureBuffers s_tlas;
-static std::vector<ID3D12Resource *> s_cachedMeshBuffersForBlas;
+struct BlasMeshSignature {
+  ID3D12Resource *vertexBuffer = nullptr;
+  ID3D12Resource *indexBuffer = nullptr;
+  uint32_t vertexCount = 0;
+  uint32_t indexCount = 0;
+};
+static std::vector<BlasMeshSignature> s_cachedMeshesForBlas;
 static std::vector<uint8_t> s_cachedMeshOpaqueForBlas;
 static std::vector<uint8_t> s_dirtyMaterialFlags;
 static std::vector<const Asset::GpuMesh *> s_cachedTlasMeshOrder;
@@ -4707,8 +4713,8 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   hitSub.pDesc = &hitGroupDesc;
 
   // Must match RayPayload in shaders/raytracing/common.hlsli:
-  // float t + 8 packed uints + uint2 packedSurface + uint parallax = 11 dwords.
-  constexpr UINT kRayPayloadSizeInBytes = 11u * sizeof(uint32_t);
+  // float t + 7 packed uints + float4 surface + uint parallax = 13 dwords.
+  constexpr UINT kRayPayloadSizeInBytes = 13u * sizeof(uint32_t);
   fprintf(stderr, "DxrRenderer: MaxPayloadSizeInBytes=%u\n",
           kRayPayloadSizeInBytes);
   shaderConfig.MaxPayloadSizeInBytes = kRayPayloadSizeInBytes;
@@ -5645,7 +5651,7 @@ void BuildAccelerationStructures(
       s_tlas.scratch = nullptr;
       s_tlasSupportsUpdate = false;
       s_allBLAS.clear();
-      s_cachedMeshBuffersForBlas.clear();
+      s_cachedMeshesForBlas.clear();
       s_cachedMeshOpaqueForBlas.clear();
       s_cachedTlasMeshOrder.clear();
       return;
@@ -5677,11 +5683,15 @@ void BuildAccelerationStructures(
     for (size_t i = 0; i < meshes.size(); ++i) {
       meshOpaqueStates[i] = IsMeshOpaqueForRt(*meshes[i]) ? 1u : 0u;
     }
-    bool meshesChanged = (meshes.size() != s_cachedMeshBuffersForBlas.size()) ||
+    bool meshesChanged = (meshes.size() != s_cachedMeshesForBlas.size()) ||
                          (meshes.size() != s_cachedMeshOpaqueForBlas.size());
     if (!meshesChanged) {
       for (size_t i = 0; i < meshes.size(); ++i) {
-        if (meshes[i]->vertexBuffer.Get() != s_cachedMeshBuffersForBlas[i] ||
+        const auto &cached = s_cachedMeshesForBlas[i];
+        if (meshes[i]->vertexBuffer.Get() != cached.vertexBuffer ||
+            meshes[i]->indexBuffer.Get() != cached.indexBuffer ||
+            meshes[i]->vertexCount != cached.vertexCount ||
+            meshes[i]->indexCount != cached.indexCount ||
             meshOpaqueStates[i] != s_cachedMeshOpaqueForBlas[i]) {
           meshesChanged = true;
           break;
@@ -5915,7 +5925,7 @@ void BuildAccelerationStructures(
 
     if (rebuildingBlas) {
       s_allBLAS.clear();
-      s_cachedMeshBuffersForBlas.clear();
+      s_cachedMeshesForBlas.clear();
       s_cachedMeshOpaqueForBlas.clear();
       s_tlasSupportsUpdate = false;
       s_cachedTlasMeshOrder.clear();
@@ -5972,7 +5982,9 @@ void BuildAccelerationStructures(
                                 enableBlasCompaction, blasBuildPreference);
             if (bl.result && bl.scratch) {
               s_allBLAS.push_back({bl, (UINT64)i});
-              s_cachedMeshBuffersForBlas.push_back(mesh.vertexBuffer.Get());
+              s_cachedMeshesForBlas.push_back(
+                  {mesh.vertexBuffer.Get(), mesh.indexBuffer.Get(),
+                   mesh.vertexCount, mesh.indexCount});
               s_cachedMeshOpaqueForBlas.push_back(meshOpaqueStates[i]);
             }
 
@@ -6019,7 +6031,9 @@ void BuildAccelerationStructures(
                           enableBlasCompaction, blasBuildPreference);
             if (bl.result && bl.scratch) {
               s_allBLAS.push_back({bl, (UINT64)i});
-              s_cachedMeshBuffersForBlas.push_back(mesh.vertexBuffer.Get());
+              s_cachedMeshesForBlas.push_back(
+                  {mesh.vertexBuffer.Get(), mesh.indexBuffer.Get(),
+                   mesh.vertexCount, mesh.indexCount});
               s_cachedMeshOpaqueForBlas.push_back(meshOpaqueStates[i]);
             }
 

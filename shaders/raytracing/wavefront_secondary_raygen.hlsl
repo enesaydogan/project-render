@@ -8,7 +8,7 @@ static RayPayload InitWavefrontSecondaryPayload(uint rayType)
     PayloadSetColor(payload, float3(0.0, 0.0, 0.0));
     payload.packedNormal = PackNormalOctahedron(float3(0.0, 1.0, 0.0));
     payload.packedAlbedo = PackPayloadAlbedo(float3(0.0, 0.0, 0.0));
-    payload.packedSurface = PackPayloadSurface(1.0, 0.0, 0.0, 0.0);
+    payload.surface = MakePayloadSurface(1.0, 0.0, 0.0, 0.0);
     payload.packedIorType = PackPayloadIorType(1.0, rayType, false, 1.0);
     payload.packedTransmission = PackPayloadTransmissionColor(float3(1.0, 1.0, 1.0));
     payload.packedSpecular = PackPayloadSpecularColor(float3(1.0, 1.0, 1.0));
@@ -113,7 +113,7 @@ void WavefrontSecondaryRayGen()
     record.packedTransmission = payload.packedTransmission;
     record.packedSpecular = payload.packedSpecular;
     record.packedState = state.packedState;
-    const float4 payloadSurface = UnpackPayloadSurface(payload.packedSurface);
+    const float4 payloadSurface = payload.surface;
     record.reserved = WavefrontApplyParallaxSelfShadowToSortKey(
         WavefrontPackMaterialSortKey(
             rayType,

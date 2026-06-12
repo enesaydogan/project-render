@@ -2392,6 +2392,13 @@ bool LoadScenePRS(const std::string &path) {
     const auto textureUploadStart = std::chrono::steady_clock::now();
     g_loadedTextures.resize(numTex);
     Asset::BeginGpuUploadBatch();
+    struct TextureUploadBatchGuard {
+      bool committed = false;
+      ~TextureUploadBatchGuard() {
+        if (!committed)
+          Asset::CancelGpuUploadBatch();
+      }
+    } textureUploadBatch;
     for (uint32_t ti = 0; ti < numTex; ++ti) {
       uint32_t w = rAssets.readU32(), h = rAssets.readU32();
       DXGI_FORMAT fmt = (DXGI_FORMAT)rAssets.readU32();
@@ -2410,6 +2417,7 @@ bool LoadScenePRS(const std::string &path) {
       }
     }
     Asset::EndGpuUploadBatch();
+    textureUploadBatch.committed = true;
     fprintf(stderr, "PRS: Texture upload: %.1f ms (%u textures, batched)\n",
             std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - textureUploadStart)

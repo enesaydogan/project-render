@@ -91,7 +91,7 @@ void Miss(inout RayPayload payload)
     // Fill remaining payload members to defaults to avoid undefined behavior.
     payload.packedNormal = PackNormalOctahedron(float3(0, 1, 0));
     payload.packedAlbedo = PackPayloadAlbedo(float3(0, 0, 0));
-    payload.packedSurface = PackPayloadSurface(0.0, 0.0, 0.0, 0.0);
+    payload.surface = MakePayloadSurface(0.0, 0.0, 0.0, 0.0);
     payload.packedIorType = PackPayloadIorType(1.0, rayType, false, 1.0);
     payload.packedTransmission = PackPayloadTransmissionColor(float3(1.0, 1.0, 1.0));
     payload.packedSpecular = PackPayloadSpecularColor(float3(1.0, 1.0, 1.0));

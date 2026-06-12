@@ -257,6 +257,9 @@ bool GetDeferGpuUpload();
 // GPU-resident until End (or an internal size-threshold flush) returns.
 void BeginGpuUploadBatch();
 void EndGpuUploadBatch();
+// Discard a partially recorded batch without submitting it. Used when scene
+// parsing fails after BeginGpuUploadBatch().
+void CancelGpuUploadBatch();
 
 // Expose current progress callback to importers that run in separate translation
 // units (used by skp_loader.cpp). Kept intentionally minimal.

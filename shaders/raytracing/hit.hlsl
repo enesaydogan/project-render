@@ -1689,8 +1689,8 @@ void ClosestHitImpl(inout RayPayload payload,
         bool thinWalled = (!clayMode || clayPreserveTransparency) &&
                           (((matFlags & MATERIAL_FLAG_THIN_WALLED) != 0) ||
                            (arch0.z > 0.5));
-        payload.packedSurface =
-            PackPayloadSurface(roughness, metalness, transmission, translucency);
+        payload.surface =
+            MakePayloadSurface(roughness, metalness, transmission, translucency);
         payload.packedIorType =
             PackPayloadIorType(emisColor.w, rayType, thinWalled, specularWeight);
         payload.packedTransmission =
@@ -1733,7 +1733,7 @@ void ClosestHitImpl(inout RayPayload payload,
             PayloadSetColor(shadowPayload, float3(0.0, 0.0, 0.0));
             shadowPayload.packedNormal = PackNormalOctahedron(float3(0.0, 1.0, 0.0));
             shadowPayload.packedAlbedo = PackPayloadAlbedo(float3(0.0, 0.0, 0.0));
-            shadowPayload.packedSurface = PackPayloadSurface(1.0, 0.0, 0.0, 0.0);
+            shadowPayload.surface = MakePayloadSurface(1.0, 0.0, 0.0, 0.0);
             shadowPayload.packedIorType = PackPayloadIorType(1.0, RAY_TYPE_SHADOW, false, 1.0);
             shadowPayload.packedTransmission = PackPayloadTransmissionColor(float3(1.0, 1.0, 1.0));
             shadowPayload.packedSpecular = PackPayloadSpecularColor(float3(1.0, 1.0, 1.0));
@@ -1818,7 +1818,8 @@ void ClosestHitImpl(inout RayPayload payload,
     bool thinWalled = (!clayMode || clayPreserveTransparency) &&
                       (((matFlags & MATERIAL_FLAG_THIN_WALLED) != 0) ||
                        (arch0.z > 0.5));
-    payload.packedSurface = PackPayloadSurface(roughness, metalness, transmission, translucency);
+    payload.surface =
+        MakePayloadSurface(roughness, metalness, transmission, translucency);
     payload.packedIorType = PackPayloadIorType(emisColor.w, rayType, thinWalled, specularWeight);
     payload.packedTransmission = PackPayloadTransmissionColor(effectiveTransmissionColor);
     payload.packedSpecular = PackPayloadSpecularColorThickness(specularColor, thickness);

@@ -6,7 +6,9 @@
 #include <algorithm>
 #include <atomic>
 #include <condition_variable>
+#include <cstdio>
 #include <deque>
+#include <exception>
 #include <map>
 #include <mutex>
 #include <set>
@@ -70,8 +72,16 @@ struct CookService::Impl {
           c.id = outputId;
           c.ok = true;
         }
-        std::vector<uint8_t> blob =
-            output.produce ? output.produce() : std::vector<uint8_t>();
+        std::vector<uint8_t> blob;
+        try {
+          blob = output.produce ? output.produce() : std::vector<uint8_t>();
+        } catch (const std::exception &e) {
+          fprintf(stderr, "Asset cook failed for %s: %s\n",
+                  outputId.ToString().c_str(), e.what());
+        } catch (...) {
+          fprintf(stderr, "Asset cook failed for %s: unknown exception\n",
+                  outputId.ToString().c_str());
+        }
         const bool outputOk =
             !blob.empty() && WriteCookedFile(output.path, blob);
         c.ok = c.ok && outputOk;

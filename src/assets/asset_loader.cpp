@@ -371,6 +371,16 @@ void EndGpuUploadBatch() {
   batch.cmdList.Reset();
 }
 
+void CancelGpuUploadBatch() {
+  GpuUploadBatch &batch = s_gpuUploadBatch;
+  batch.open = false;
+  batch.recording = false;
+  batch.pendingBytes = 0;
+  batch.keepAlive.clear();
+  batch.cmdList.Reset();
+  batch.allocator.Reset();
+}
+
 inline uint32_t ComputeMipLevels(uint32_t width, uint32_t height) {
   if (width == 0 || height == 0)
     return 1;

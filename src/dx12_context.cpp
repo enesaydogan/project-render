@@ -327,10 +327,13 @@ void WaitGPUIdle() {
     }
     fence = g_idleFence;
     waitValue = g_idleFenceNextValue++;
+    // Fence values must be submitted in allocation order. Keeping Signal()
+    // under the same lock prevents a later caller from signaling N+1 before
+    // this caller submits N.
+    if (FAILED(g_commandQueue->Signal(fence.Get(), waitValue)))
+      return;
   }
 
-  if (FAILED(g_commandQueue->Signal(fence.Get(), waitValue)))
-    return;
   if (fence->GetCompletedValue() >= waitValue)
     return;
 
