@@ -3027,7 +3027,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     DX12Context::g_commandList->RSSetViewports(1, &viewport);
     DX12Context::g_commandList->RSSetScissorRects(1, &scissorRect);
 
-    if (IsSceneIoJobActive()) {
+    if (IsSceneStateLockedByIo()) {
       TR(DX12Context::g_commandList.Get(),
          DX12Context::g_renderTargets[DX12Context::g_frameIndex].Get(),
          D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
@@ -3826,7 +3826,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
       g_fpsTimer = 0.0f;
     }
 
-    const bool sceneIoActive = IsSceneIoJobActive();
+    const bool sceneIoActive = IsSceneStateLockedByIo();
     const bool sceneLoadWarmupActive =
         !sceneIoActive && g_currentRenderMode == RenderMode::DXR &&
         DxrRenderer::HasSceneLoadWarmup();

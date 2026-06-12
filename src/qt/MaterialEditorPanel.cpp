@@ -2131,7 +2131,7 @@ void MaterialEditorPanel::createUi()
 void MaterialEditorPanel::refreshMaterials()
 {
     m_refreshQueued = false;
-    if (IsSceneIoJobActive()) {
+    if (IsSceneStateLockedByIo()) {
         return;
     }
     Scene::ProcessPendingImport();

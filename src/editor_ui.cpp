@@ -307,6 +307,7 @@ void StartSceneIoJob(bool isSave, const std::string &utf8Path) {
     g_sceneIoStageAtomic = g_sceneIoJob.stage;
   }
 
+  SceneIO::ResetSceneStateReleased();
   SceneIO::SetProgressCallback(&SceneIoProgressSink);
   g_sceneIoJob.worker =
       std::async(std::launch::async, [isSave, jobPath]() -> bool {
@@ -320,6 +321,21 @@ bool IsSceneLoadInProgress() {
 
 bool IsSceneIoJobActive() {
   return g_sceneIoJob.active;
+}
+
+// True while a scene I/O job still needs exclusive access to scene state.
+// Loads hold the lock for their whole duration; saves release it as soon as
+// the worker has serialized the scene into its own buffers (the remaining
+// compression + file write read only those buffers), so editing and
+// rendering can resume while the save finishes in the background.
+bool IsSceneStateLockedByIo() {
+  if (!g_sceneIoJob.active) {
+    return false;
+  }
+  if (g_sceneIoJob.isSave && SceneIO::IsSceneStateReleased()) {
+    return false;
+  }
+  return true;
 }
 
 bool IsSceneIoSaveJob() {
@@ -2171,7 +2187,7 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
     ImGui_ImplDX12_NewFrame();
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
-    if (!IsSceneIoJobActive()) {
+    if (!IsSceneStateLockedByIo()) {
       ImGuizmo::BeginFrame();
       Scene::DrawGizmo();
       Scene::DrawLightGizmo();
@@ -2221,9 +2237,9 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
 
   DrawSceneIoOverlay();
 
-  if (IsSceneIoJobActive()) {
+  if (IsSceneStateLockedByIo()) {
     // Scene I/O owns the scene state. Keep only the overlay alive until the
-    // worker has finished.
+    // worker releases it (saves release after serializing; loads on finish).
     ImGui::Render();
     return;
   }

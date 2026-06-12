@@ -250,6 +250,14 @@ void ClearProgressCallback();
 void SetDeferGpuUpload(bool enable);
 bool GetDeferGpuUpload();
 
+// Batched GPU texture uploads for the calling thread. Between Begin/End,
+// LoadTextureFromMemory / LoadTextureFromMemoryMipChain record their copies
+// into one shared command list instead of executing + fence-waiting per
+// texture; End submits the batch and waits once. The textures are not
+// GPU-resident until End (or an internal size-threshold flush) returns.
+void BeginGpuUploadBatch();
+void EndGpuUploadBatch();
+
 // Expose current progress callback to importers that run in separate translation
 // units (used by skp_loader.cpp). Kept intentionally minimal.
 extern std::function<void(float, const std::string &)> s_progressCb;

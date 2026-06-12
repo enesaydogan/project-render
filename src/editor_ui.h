@@ -198,6 +198,12 @@ std::string WStringToUtf8(const std::wstring &ws);
 // Scene I/O job helpers (shared by ImGui + Qt)
 void StartSceneIoJob(bool isSave, const std::string &utf8Path);
 bool IsSceneIoJobActive();
+// Scene-state lock: loads hold it for their whole duration, saves only until
+// the scene has been serialized into the worker's own buffers. Use this (not
+// IsSceneIoJobActive) to gate rendering/editing so saves unblock the UI early;
+// keep IsSceneIoJobActive for job-lifecycle gates (starting another job,
+// quitting the app).
+bool IsSceneStateLockedByIo();
 bool IsSceneIoSaveJob();
 float GetSceneIoProgress();
 std::string GetSceneIoStage();

@@ -1276,7 +1276,7 @@ void LightsPanel::refreshLights()
 {
     m_syncing = true;
 
-    const bool sceneIoActive = IsSceneIoJobActive();
+    const bool sceneIoActive = IsSceneStateLockedByIo();
     m_loadNotice->setVisible(sceneIoActive);
     m_lightTree->setEnabled(!sceneIoActive);
     m_propertiesGroup->setEnabled(!sceneIoActive);

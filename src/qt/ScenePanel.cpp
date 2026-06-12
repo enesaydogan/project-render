@@ -462,7 +462,7 @@ ScenePanel::ScenePanel(QWidget *parent)
 
     m_refreshTimer = new QTimer(this);
     connect(m_refreshTimer, &QTimer::timeout, this, [this]() {
-        const bool sceneIoActive = IsSceneIoJobActive();
+        const bool sceneIoActive = IsSceneStateLockedByIo();
         const bool importActive = Scene::IsImportInProgress();
         const bool sceneIoTransition = (sceneIoActive != m_lastSceneIoActive);
         const bool importTransition = (importActive != m_lastImportActive);
@@ -982,7 +982,7 @@ void ScenePanel::requestDeleteSelectedNode()
 
 void ScenePanel::showNodeContextMenu(const QPoint &pos)
 {
-    if (!m_nodeList || IsSceneIoJobActive()) {
+    if (!m_nodeList || IsSceneStateLockedByIo()) {
         return;
     }
 
@@ -1070,7 +1070,7 @@ void ScenePanel::refreshSceneList()
 {
     m_syncing = true;
     const QSignalBlocker treeSignalBlocker(m_nodeList);
-    const bool sceneIoActive = IsSceneIoJobActive();
+    const bool sceneIoActive = IsSceneStateLockedByIo();
     const bool importActive = Scene::IsImportInProgress();
     m_lastSceneIoActive = sceneIoActive;
     m_lastImportActive = importActive;

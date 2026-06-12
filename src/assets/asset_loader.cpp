@@ -281,6 +281,96 @@ static void ExecuteCommandListAndWait(ID3D12GraphicsCommandList *cmdList) {
   WaitForQueueIdle(s_queue.Get());
 }
 
+// === Batched GPU uploads ===
+// Scene loading uploads dozens-to-hundreds of textures; ExecuteCommandListAndWait
+// per resource costs a full CPU<->GPU round trip each. Between
+// BeginGpuUploadBatch/EndGpuUploadBatch the texture loaders record their copies
+// into one shared command list and the batch waits once. Thread-local (like
+// s_deferGpuUpload) so the scene-IO worker and the cook thread can't
+// interleave into each other's lists.
+struct GpuUploadBatch {
+  ComPtr<ID3D12CommandAllocator> allocator;
+  ComPtr<ID3D12GraphicsCommandList> cmdList;
+  std::vector<ComPtr<ID3D12Resource>> keepAlive;
+  UINT64 pendingBytes = 0;
+  bool open = false;
+  bool recording = false;
+};
+static thread_local GpuUploadBatch s_gpuUploadBatch;
+// Auto-flush threshold bounds peak upload-heap memory on huge scenes.
+static constexpr UINT64 kGpuUploadBatchFlushBytes = 256ull << 20;
+
+static void FlushGpuUploadBatch() {
+  GpuUploadBatch &batch = s_gpuUploadBatch;
+  if (batch.recording) {
+    ExecuteCommandListAndWait(batch.cmdList.Get());
+    batch.recording = false;
+  }
+  batch.keepAlive.clear();
+  batch.pendingBytes = 0;
+}
+
+// Returns the batch command list in recording state, or nullptr when no batch
+// is open (callers then fall back to their own one-shot list).
+static ID3D12GraphicsCommandList *AcquireGpuUploadBatchList() {
+  GpuUploadBatch &batch = s_gpuUploadBatch;
+  if (!batch.open || !s_device) {
+    return nullptr;
+  }
+  if (!batch.allocator &&
+      FAILED(s_device->CreateCommandAllocator(
+          D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&batch.allocator)))) {
+    return nullptr;
+  }
+  if (!batch.cmdList) {
+    if (FAILED(s_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT,
+                                           batch.allocator.Get(), nullptr,
+                                           IID_PPV_ARGS(&batch.cmdList)))) {
+      return nullptr;
+    }
+    batch.recording = true;
+  } else if (!batch.recording) {
+    // Previous flush executed and waited, so the allocator is reusable.
+    if (FAILED(batch.allocator->Reset()) ||
+        FAILED(batch.cmdList->Reset(batch.allocator.Get(), nullptr))) {
+      return nullptr;
+    }
+    batch.recording = true;
+  }
+  return batch.cmdList.Get();
+}
+
+static void NoteGpuUploadBatchResource(ComPtr<ID3D12Resource> uploadBuffer,
+                                       UINT64 bytes) {
+  GpuUploadBatch &batch = s_gpuUploadBatch;
+  batch.keepAlive.push_back(std::move(uploadBuffer));
+  batch.pendingBytes += bytes;
+  if (batch.pendingBytes >= kGpuUploadBatchFlushBytes) {
+    FlushGpuUploadBatch();
+  }
+}
+
+void BeginGpuUploadBatch() {
+  GpuUploadBatch &batch = s_gpuUploadBatch;
+  if (batch.open) {
+    return;
+  }
+  batch.open = true;
+  batch.pendingBytes = 0;
+  batch.keepAlive.clear();
+}
+
+void EndGpuUploadBatch() {
+  GpuUploadBatch &batch = s_gpuUploadBatch;
+  if (!batch.open) {
+    return;
+  }
+  FlushGpuUploadBatch();
+  batch.open = false;
+  batch.allocator.Reset();
+  batch.cmdList.Reset();
+}
+
 inline uint32_t ComputeMipLevels(uint32_t width, uint32_t height) {
   if (width == 0 || height == 0)
     return 1;
@@ -494,13 +584,18 @@ static bool CreateGpuTexture(const void *src, int width, int height,
 
   uploadBuffer->Unmap(0, nullptr);
 
+  ID3D12GraphicsCommandList *batchList = AcquireGpuUploadBatchList();
   ComPtr<ID3D12CommandAllocator> allocator;
-  ComPtr<ID3D12GraphicsCommandList> cmdList;
-  ThrowIfFailed(s_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,
-                                                 IID_PPV_ARGS(&allocator)));
-  ThrowIfFailed(s_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT,
-                                            allocator.Get(), nullptr,
-                                            IID_PPV_ARGS(&cmdList)));
+  ComPtr<ID3D12GraphicsCommandList> localList;
+  ID3D12GraphicsCommandList *cmdList = batchList;
+  if (!cmdList) {
+    ThrowIfFailed(s_device->CreateCommandAllocator(
+        D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocator)));
+    ThrowIfFailed(s_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT,
+                                              allocator.Get(), nullptr,
+                                              IID_PPV_ARGS(&localList)));
+    cmdList = localList.Get();
+  }
 
   for (uint32_t i = 0; i < mipLevels; ++i) {
     D3D12_TEXTURE_COPY_LOCATION dst = {
@@ -518,7 +613,11 @@ static bool CreateGpuTexture(const void *src, int width, int height,
   barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE;
   cmdList->ResourceBarrier(1, &barrier);
 
-  ExecuteCommandListAndWait(cmdList.Get());
+  if (batchList) {
+    NoteGpuUploadBatchResource(uploadBuffer, totalBytes);
+  } else {
+    ExecuteCommandListAndWait(cmdList);
+  }
 
   outTex.width = width;
   outTex.height = height;
@@ -4397,13 +4496,18 @@ Texture LoadTextureFromMemoryMipChain(const void *src, size_t srcSize,
   }
   uploadBuffer->Unmap(0, nullptr);
 
+  ID3D12GraphicsCommandList *batchList = AcquireGpuUploadBatchList();
   ComPtr<ID3D12CommandAllocator> allocator;
-  ComPtr<ID3D12GraphicsCommandList> cmdList;
-  ThrowIfFailed(s_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,
-                                                 IID_PPV_ARGS(&allocator)));
-  ThrowIfFailed(s_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT,
-                                            allocator.Get(), nullptr,
-                                            IID_PPV_ARGS(&cmdList)));
+  ComPtr<ID3D12GraphicsCommandList> localList;
+  ID3D12GraphicsCommandList *cmdList = batchList;
+  if (!cmdList) {
+    ThrowIfFailed(s_device->CreateCommandAllocator(
+        D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocator)));
+    ThrowIfFailed(s_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT,
+                                              allocator.Get(), nullptr,
+                                              IID_PPV_ARGS(&localList)));
+    cmdList = localList.Get();
+  }
 
   for (uint32_t mip = 0; mip < usableMips; ++mip) {
     D3D12_TEXTURE_COPY_LOCATION dst = {
@@ -4422,7 +4526,11 @@ Texture LoadTextureFromMemoryMipChain(const void *src, size_t srcSize,
   barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
   cmdList->ResourceBarrier(1, &barrier);
 
-  ExecuteCommandListAndWait(cmdList.Get());
+  if (batchList) {
+    NoteGpuUploadBatchResource(uploadBuffer, totalBytes);
+  } else {
+    ExecuteCommandListAndWait(cmdList);
+  }
 
   tex.width = static_cast<UINT>(width);
   tex.height = static_cast<UINT>(height);

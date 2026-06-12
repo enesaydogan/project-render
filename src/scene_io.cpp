@@ -61,7 +61,13 @@ namespace fs = std::filesystem;
 using json = nlohmann::json;
 
 static const char PRS_MAGIC[4] = {'P', 'R', 'S', '1'};
-static const uint32_t PRS_VERSION = 5; // v5: node modelAssetId + texture dedup
+// v6: sectioned container — metadata (volatile, small) and assets
+//     (meshes+textures, large and rarely changing) are compressed as separate
+//     sections, with a content hash on the asset section so unchanged assets
+//     skip recompression on save.
+// v5: node modelAssetId + texture dedup.
+static const uint32_t PRS_VERSION = 6;
+static const uint32_t PRS_FIRST_SECTIONED_VERSION = 6;
 static const char PRS_CHUNK_MAGIC[4] = {'P', 'R', 'S', 'C'};
 static const char PRS_CHUNK_V3_MAGIC[4] = {'P', 'R', 'S', '3'};
 static constexpr size_t PRS_CHUNK_SIZE = 4ull * 1024ull * 1024ull;
@@ -73,6 +79,46 @@ enum class PrsCompressionAlgorithm : uint32_t {
 
 static std::mutex g_sceneIoProgressMutex;
 static SceneIO::ProgressCallback g_sceneIoProgressCb = nullptr;
+
+// Set by SaveScene once the scene state has been fully serialized into local
+// payload buffers — from that point on the save no longer reads scene data,
+// so the editor/render lock can be released while compression and file write
+// continue on the worker. Reset by the UI when a job starts.
+static std::atomic<bool> g_sceneStateReleased{false};
+
+// Fast non-cryptographic 64-bit hash (u64-stride multiply/rotate mix).
+// Used to detect whether the asset section changed between saves.
+static uint64_t HashPayload64(const uint8_t *data, size_t size) {
+  uint64_t h = 0x9E3779B97F4A7C15ull ^ static_cast<uint64_t>(size);
+  size_t i = 0;
+  for (; i + 8 <= size; i += 8) {
+    uint64_t v;
+    memcpy(&v, data + i, 8);
+    h ^= v * 0x9DDFEA08EB382D69ull;
+    h = (h << 27) | (h >> 37);
+    h *= 0x9E3779B97F4A7C15ull;
+  }
+  for (; i < size; ++i) {
+    h ^= data[i];
+    h *= 0x100000001B3ull;
+  }
+  return h;
+}
+
+// Cache of the last compressed asset section (from the previous save or the
+// load). When the asset payload's hash and size are unchanged, save reuses
+// these bytes and skips compression entirely — the typical "moved objects,
+// tweaked materials" save then only compresses the small metadata section.
+struct AssetSectionCache {
+  std::mutex mutex;
+  bool valid = false;
+  uint64_t hash = 0;
+  uint64_t uncompSize = 0;
+  std::vector<uint8_t> compressed;
+};
+static AssetSectionCache g_assetSectionCache;
+// Don't retain enormous compressed blobs in RAM just for save acceleration.
+static constexpr size_t kAssetSectionCacheMaxBytes = 1536ull << 20;
 
 static int PathTracingBackendToSceneValue() {
   return DxrRenderer::GetPathTracingBackend() ==
@@ -1896,6 +1942,14 @@ void SetProgressCallback(ProgressCallback cb) {
   g_sceneIoProgressCb = cb;
 }
 
+bool IsSceneStateReleased() {
+  return g_sceneStateReleased.load(std::memory_order_acquire);
+}
+
+void ResetSceneStateReleased() {
+  g_sceneStateReleased.store(false, std::memory_order_release);
+}
+
 // ---------------------------------------------------------------------------
 // SaveScene — Binary compressed .prs format
 // ---------------------------------------------------------------------------
@@ -1960,26 +2014,31 @@ bool SaveScene(const std::string &path) {
     metadataMs = elapsedMs(stageStart, stageEnd);
     stageStart = stageEnd;
 
-    // 2. Build uncompressed binary payload
-    std::vector<uint8_t> payload;
+    // 2. Build uncompressed payloads. Metadata (volatile, small) and assets
+    // (meshes+textures, large and rarely changing) are separate sections so
+    // the asset section's compression can be skipped when its content is
+    // unchanged since the last save/load (v6 sectioned container).
+    std::vector<uint8_t> metaPayload;
+    metaPayload.reserve(4 + msgpack.size());
+    BinaryWriter wMeta(metaPayload);
+    wMeta.writeU32((uint32_t)msgpack.size());
+    wMeta.writeBytes(msgpack.data(), msgpack.size());
+    msgpack.clear(); msgpack.shrink_to_fit();
+    ReportProgress(0.12f, "Serializing meshes");
+
+    std::vector<uint8_t> assetPayload;
     {
       // Pre-estimate size
-      size_t est = 4 + msgpack.size() + 4 + 4;
+      size_t est = 4 + 4;
       for (auto &m : g_loadedMeshes) est += 40 + m.cpuVertices.size()*sizeof(Asset::Vertex) + m.cpuIndices.size()*sizeof(uint32_t);
       for (int source : textureSlotToSource)
         if (source >= 0)
           est += 20 +
                  g_loadedTextures[static_cast<size_t>(source)].cpuData.size();
-      payload.reserve(est);
+      assetPayload.reserve(est);
     }
 
-    BinaryWriter w(payload);
-
-    // Metadata
-    w.writeU32((uint32_t)msgpack.size());
-    w.writeBytes(msgpack.data(), msgpack.size());
-    msgpack.clear(); msgpack.shrink_to_fit();
-    ReportProgress(0.12f, "Serializing meshes");
+    BinaryWriter w(assetPayload);
 
     // Meshes — raw binary (no base64 = saves ~33% size)
     w.writeU32((uint32_t)g_loadedMeshes.size());
@@ -2021,7 +2080,12 @@ bool SaveScene(const std::string &path) {
     serializeMs = elapsedMs(stageStart, stageEnd);
     stageStart = stageEnd;
 
-    size_t uncompSize = payload.size();
+    // Scene state is fully captured in metaPayload/assetPayload now; the UI
+    // may release the scene/render lock while compression and the file write
+    // continue on this worker.
+    g_sceneStateReleased.store(true, std::memory_order_release);
+
+    size_t uncompSize = metaPayload.size() + assetPayload.size();
     fprintf(stderr,
             "PRS: Uncompressed: %.2f MB (meshes %.2f MB, textures %.2f MB)\n",
             uncompSize / (1024.0 * 1024.0),
@@ -2036,19 +2100,73 @@ bool SaveScene(const std::string &path) {
     fprintf(stderr, "PRS: Save format: v%u, compression: %s\n",
             saveLegacyV2 ? 2u : PRS_VERSION,
             CompressionAlgorithmName(compressionAlgorithm));
-    std::vector<uint8_t> compressed;
-    if (!CompressChunked(payload, compressed, compressionAlgorithm,
-                         saveLegacyV2)) {
-      fprintf(stderr, "PRS: Compression failed\n");
-      return false;
+    const uint64_t metaUncompSize64 = (uint64_t)metaPayload.size();
+    const uint64_t assetUncompSize64 = (uint64_t)assetPayload.size();
+    std::vector<uint8_t> compressed;       // legacy monolithic blob
+    std::vector<uint8_t> compressedMeta;   // v6 sections
+    std::vector<uint8_t> compressedAssets;
+    uint64_t assetHash = 0;
+    bool reusedAssetCompression = false;
+    if (saveLegacyV2) {
+      // Fully v2-compatible monolithic payload (meta + assets concatenated).
+      std::vector<uint8_t> payload;
+      payload.reserve(uncompSize);
+      payload.insert(payload.end(), metaPayload.begin(), metaPayload.end());
+      payload.insert(payload.end(), assetPayload.begin(), assetPayload.end());
+      if (!CompressChunked(payload, compressed, compressionAlgorithm, true)) {
+        fprintf(stderr, "PRS: Compression failed\n");
+        return false;
+      }
+    } else {
+      assetHash = HashPayload64(assetPayload.data(), assetPayload.size());
+      {
+        std::lock_guard<std::mutex> lock(g_assetSectionCache.mutex);
+        if (g_assetSectionCache.valid &&
+            g_assetSectionCache.hash == assetHash &&
+            g_assetSectionCache.uncompSize == assetUncompSize64) {
+          compressedAssets = g_assetSectionCache.compressed;
+          reusedAssetCompression = true;
+        }
+      }
+      if (reusedAssetCompression) {
+        ReportProgress(0.85f, "Reusing cached asset compression");
+        fprintf(stderr,
+                "PRS: Asset section unchanged (hash %016llx) - reusing cached "
+                "compression (%.2f MB)\n",
+                (unsigned long long)assetHash,
+                compressedAssets.size() / (1024.0 * 1024.0));
+      } else {
+        if (!CompressChunked(assetPayload, compressedAssets,
+                             compressionAlgorithm)) {
+          fprintf(stderr, "PRS: Compression failed\n");
+          return false;
+        }
+        if (compressedAssets.size() <= kAssetSectionCacheMaxBytes) {
+          std::lock_guard<std::mutex> lock(g_assetSectionCache.mutex);
+          g_assetSectionCache.valid = true;
+          g_assetSectionCache.hash = assetHash;
+          g_assetSectionCache.uncompSize = assetUncompSize64;
+          g_assetSectionCache.compressed = compressedAssets;
+        }
+      }
+      if (!CompressChunked(metaPayload, compressedMeta, compressionAlgorithm)) {
+        fprintf(stderr, "PRS: Compression failed\n");
+        return false;
+      }
     }
-    payload.clear(); payload.shrink_to_fit();
+    metaPayload.clear(); metaPayload.shrink_to_fit();
+    assetPayload.clear(); assetPayload.shrink_to_fit();
+    const size_t totalCompressedSize =
+        saveLegacyV2 ? compressed.size()
+                     : compressedMeta.size() + compressedAssets.size();
     stageEnd = std::chrono::steady_clock::now();
     compressMs = elapsedMs(stageStart, stageEnd);
     stageStart = stageEnd;
 
-    fprintf(stderr, "PRS: Compressed: %.2f MB (%.1f%% ratio)\n",
-            compressed.size()/(1024.0*1024.0), 100.0*compressed.size()/uncompSize);
+    fprintf(stderr, "PRS: Compressed: %.2f MB (%.1f%% ratio)%s\n",
+            totalCompressedSize/(1024.0*1024.0),
+            100.0*totalCompressedSize/uncompSize,
+            reusedAssetCompression ? " [asset section reused]" : "");
 
     // 4. Write: header (16 bytes) + compressed payload
     ReportProgress(0.96f, "Writing file");
@@ -2077,7 +2195,25 @@ bool SaveScene(const std::string &path) {
     file.write(reinterpret_cast<const char*>(&ver), 4);
     uint64_t usz = (uint64_t)uncompSize;
     file.write(reinterpret_cast<const char*>(&usz), 8);
-    file.write(reinterpret_cast<const char*>(compressed.data()), compressed.size());
+    if (saveLegacyV2) {
+      file.write(reinterpret_cast<const char*>(compressed.data()),
+                 compressed.size());
+    } else {
+      // v6 sections:
+      //   [metaUncomp u64][metaComp u64][meta chunked blob]
+      //   [assetUncomp u64][assetHash u64][assetComp u64][asset chunked blob]
+      const uint64_t metaComp = (uint64_t)compressedMeta.size();
+      const uint64_t assetComp = (uint64_t)compressedAssets.size();
+      file.write(reinterpret_cast<const char*>(&metaUncompSize64), 8);
+      file.write(reinterpret_cast<const char*>(&metaComp), 8);
+      file.write(reinterpret_cast<const char*>(compressedMeta.data()),
+                 compressedMeta.size());
+      file.write(reinterpret_cast<const char*>(&assetUncompSize64), 8);
+      file.write(reinterpret_cast<const char*>(&assetHash), 8);
+      file.write(reinterpret_cast<const char*>(&assetComp), 8);
+      file.write(reinterpret_cast<const char*>(compressedAssets.data()),
+                 compressedAssets.size());
+    }
     file.close();
     if (!file) {
       fprintf(stderr, "PRS: Save failed: write did not complete\n");
@@ -2088,7 +2224,7 @@ bool SaveScene(const std::string &path) {
     ReportProgress(0.98f, "Finalizing file");
 
     fprintf(stderr, "PRS: Saved %.2f MB (was %.2f MB uncompressed)\n",
-            (16+compressed.size())/(1024.0*1024.0), uncompSize/(1024.0*1024.0));
+            (16+totalCompressedSize)/(1024.0*1024.0), uncompSize/(1024.0*1024.0));
     fprintf(stderr,
             "PRS: Save timings: metadata %.1f ms, serialize %.1f ms, "
             "compress %.1f ms, write %.1f ms, total %.1f ms\n",
@@ -2154,8 +2290,59 @@ bool LoadScenePRS(const std::string &path) {
             fileSize/(1024.0*1024.0), uncompSize/(1024.0*1024.0));
 
     // Decompress
-    std::vector<uint8_t> payload;
-    if (!DecompressLZMSAny(comp.data(), compSize, payload, (size_t)uncompSize)) return false;
+    std::vector<uint8_t> payload;        // monolithic (v<=5) or metadata section (v6+)
+    std::vector<uint8_t> assetPayload;   // v6+ only
+    if (version >= PRS_FIRST_SECTIONED_VERSION) {
+      size_t pos = 0;
+      auto readU64At = [&](uint64_t &v) -> bool {
+        if (pos + 8 > compSize) return false;
+        memcpy(&v, comp.data() + pos, 8);
+        pos += 8;
+        return true;
+      };
+      uint64_t metaUncomp = 0, metaComp = 0;
+      if (!readU64At(metaUncomp) || !readU64At(metaComp)) return false;
+      if (metaComp > compSize - pos) return false;
+      if (!DecompressLZMSAny(comp.data() + pos, (size_t)metaComp, payload,
+                             (size_t)metaUncomp))
+        return false;
+      pos += (size_t)metaComp;
+
+      uint64_t assetUncomp = 0, storedAssetHash = 0, assetComp = 0;
+      if (!readU64At(assetUncomp) || !readU64At(storedAssetHash) ||
+          !readU64At(assetComp))
+        return false;
+      if (assetComp > compSize - pos) return false;
+      if (!DecompressLZMSAny(comp.data() + pos, (size_t)assetComp,
+                             assetPayload, (size_t)assetUncomp))
+        return false;
+
+      // Seed the save-side cache so the first save after load can skip
+      // recompressing unchanged assets. Verify the stored hash against the
+      // decompressed bytes first so a corrupt or hand-edited file can't
+      // poison future saves.
+      const uint64_t actualHash =
+          HashPayload64(assetPayload.data(), assetPayload.size());
+      if (actualHash == storedAssetHash &&
+          assetComp <= kAssetSectionCacheMaxBytes) {
+        std::lock_guard<std::mutex> lock(g_assetSectionCache.mutex);
+        g_assetSectionCache.valid = true;
+        g_assetSectionCache.hash = storedAssetHash;
+        g_assetSectionCache.uncompSize = assetUncomp;
+        g_assetSectionCache.compressed.assign(
+            comp.data() + pos, comp.data() + pos + (size_t)assetComp);
+      } else if (actualHash != storedAssetHash) {
+        fprintf(stderr,
+                "PRS: Asset section hash mismatch (stored %016llx, actual "
+                "%016llx) - save cache not seeded\n",
+                (unsigned long long)storedAssetHash,
+                (unsigned long long)actualHash);
+      }
+    } else {
+      if (!DecompressLZMSAny(comp.data(), compSize, payload,
+                             (size_t)uncompSize))
+        return false;
+    }
     comp.clear(); comp.shrink_to_fit();
     ReportProgress(0.62f, "Parsing scene data");
 
@@ -2170,40 +2357,51 @@ bool LoadScenePRS(const std::string &path) {
     // Reset scene
     Scene::ResetScene();
 
+    // Asset section: v6+ reads meshes/textures from its own buffer; older
+    // versions continue in the monolithic payload right after the metadata.
+    BinaryReader rAssets =
+        (version >= PRS_FIRST_SECTIONED_VERSION)
+            ? BinaryReader(assetPayload.data(), assetPayload.size())
+            : r;
+
     // Read meshes (binary)
-    uint32_t numMeshes = r.readU32();
+    uint32_t numMeshes = rAssets.readU32();
     fprintf(stderr, "PRS: %u meshes\n", numMeshes);
     struct RawMesh { int32_t matIdx; uint32_t vc, ic; float mn[3], mx[3]; std::vector<Asset::Vertex> verts; std::vector<uint32_t> inds; };
     std::vector<RawMesh> rawMeshes(numMeshes);
     for (uint32_t mi = 0; mi < numMeshes; ++mi) {
       auto &rm = rawMeshes[mi];
-      rm.matIdx = r.readI32(); rm.vc = r.readU32(); rm.ic = r.readU32();
-      for (int k=0;k<3;k++) rm.mn[k]=r.readF32();
-      for (int k=0;k<3;k++) rm.mx[k]=r.readF32();
-      uint32_t vb = r.readU32();
+      rm.matIdx = rAssets.readI32(); rm.vc = rAssets.readU32(); rm.ic = rAssets.readU32();
+      for (int k=0;k<3;k++) rm.mn[k]=rAssets.readF32();
+      for (int k=0;k<3;k++) rm.mx[k]=rAssets.readF32();
+      uint32_t vb = rAssets.readU32();
       rm.verts.resize(rm.vc);
-      if (vb && vb == rm.vc*sizeof(Asset::Vertex)) memcpy(rm.verts.data(), r.readBytes(vb), vb);
-      else if (vb) r.readBytes(vb);
-      uint32_t ib = r.readU32();
+      if (vb && vb == rm.vc*sizeof(Asset::Vertex)) memcpy(rm.verts.data(), rAssets.readBytes(vb), vb);
+      else if (vb) rAssets.readBytes(vb);
+      uint32_t ib = rAssets.readU32();
       rm.inds.resize(rm.ic);
-      if (ib && ib == rm.ic*sizeof(uint32_t)) memcpy(rm.inds.data(), r.readBytes(ib), ib);
-      else if (ib) r.readBytes(ib);
+      if (ib && ib == rm.ic*sizeof(uint32_t)) memcpy(rm.inds.data(), rAssets.readBytes(ib), ib);
+      else if (ib) rAssets.readBytes(ib);
     }
 
-    // Read textures (binary)
-    uint32_t numTex = r.readU32();
+    // Read textures (binary). All texture copies are recorded into one
+    // batched command list and submitted with a single fence wait instead of
+    // a full CPU<->GPU round trip per texture.
+    uint32_t numTex = rAssets.readU32();
     fprintf(stderr, "PRS: %u textures\n", numTex);
+    const auto textureUploadStart = std::chrono::steady_clock::now();
     g_loadedTextures.resize(numTex);
+    Asset::BeginGpuUploadBatch();
     for (uint32_t ti = 0; ti < numTex; ++ti) {
-      uint32_t w = r.readU32(), h = r.readU32();
-      DXGI_FORMAT fmt = (DXGI_FORMAT)r.readU32();
+      uint32_t w = rAssets.readU32(), h = rAssets.readU32();
+      DXGI_FORMAT fmt = (DXGI_FORMAT)rAssets.readU32();
       uint32_t mipLevels = 1;
       if (version >= 2) {
-        mipLevels = (std::max)(1u, r.readU32());
+        mipLevels = (std::max)(1u, rAssets.readU32());
       }
-      uint32_t db = r.readU32();
+      uint32_t db = rAssets.readU32();
       if (db) {
-        const uint8_t *px = r.readBytes(db);
+        const uint8_t *px = rAssets.readBytes(db);
         g_loadedTextures[ti] =
             version >= 2
                 ? Asset::LoadTextureFromMemoryMipChain(px, db, w, h, fmt,
@@ -2211,6 +2409,12 @@ bool LoadScenePRS(const std::string &path) {
                 : Asset::LoadTextureFromMemory(px, w, h, fmt);
       }
     }
+    Asset::EndGpuUploadBatch();
+    fprintf(stderr, "PRS: Texture upload: %.1f ms (%u textures, batched)\n",
+            std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - textureUploadStart)
+                .count(),
+            numTex);
     Scene::RegisterTextures(g_loadedTextures);
     ReportProgress(0.82f, "Uploading textures and meshes");
 
@@ -2234,14 +2438,28 @@ bool LoadScenePRS(const std::string &path) {
       }
     }
 
-    // Create GPU meshes
+    // Create GPU meshes: defer per-mesh buffer creation and upload them all
+    // with one batched submit + single fence wait (same path livelink and the
+    // asset cooker use).
     bool hasEmbedded = (numMeshes > 0);
-    for (auto &rm : rawMeshes) {
-      Asset::GpuMesh gm = Asset::LoadMeshFromMemory(rm.verts, rm.inds);
-      gm.materialIndex = rm.matIdx;
-      for (int k=0;k<3;k++) { gm.minBound[k]=rm.mn[k]; gm.maxBound[k]=rm.mx[k]; }
-      g_loadedMeshes.push_back(gm);
+    const auto meshUploadStart = std::chrono::steady_clock::now();
+    {
+      const bool prevDefer = Asset::GetDeferGpuUpload();
+      Asset::SetDeferGpuUpload(true);
+      for (auto &rm : rawMeshes) {
+        Asset::GpuMesh gm = Asset::LoadMeshFromMemory(rm.verts, rm.inds);
+        gm.materialIndex = rm.matIdx;
+        for (int k=0;k<3;k++) { gm.minBound[k]=rm.mn[k]; gm.maxBound[k]=rm.mx[k]; }
+        g_loadedMeshes.push_back(gm);
+      }
+      Asset::SetDeferGpuUpload(prevDefer);
     }
+    Asset::UploadMeshes(g_loadedMeshes);
+    fprintf(stderr, "PRS: Mesh upload: %.1f ms (%u meshes, batched)\n",
+            std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - meshUploadStart)
+                .count(),
+            numMeshes);
     size_t embMeshCnt = g_loadedMeshes.size();
 
     // Apply metadata
