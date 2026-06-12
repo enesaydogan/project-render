@@ -771,9 +771,8 @@ bool StreamlineManager::Evaluate(
   // c.depthInverted: the shader writes NDC z from
   //   A = far / (far - near); B = -near * far / (far - near);
   //   ndc = A + B / z;    // near→0, far→1  (non-reverse-Z)
-  // for SR mode and view-space linear Z (meters) for RR mode. Either way
-  // the depth buffer is NOT reverse-Z. If you ever switch to reverse-Z
-  // for SR, flip this to eTrue.
+  // for both SR and RR. True view-space depth is kept in a separate renderer
+  // buffer and is not tagged as Streamline depth.
   c.depthInverted = sl::Boolean::eFalse;
   c.cameraMotionIncluded = sl::Boolean::eTrue;
   c.motionVectors3D = sl::Boolean::eFalse;
@@ -877,6 +876,9 @@ bool StreamlineManager::Evaluate(
   // configuration. If we want true linear-depth tagging in the future,
   // first audit MakeWorldToCameraView / MakeCameraViewToWorld against
   // sl_consts.h conventions and validate with sl::eLogLevelVerbose.
+  // g_depth is normalized device depth in both modes. In particular, RR sky
+  // pixels are 1.0 rather than camera farZ, which keeps low-resolution
+  // reconstruction neighborhoods inside the declared depth domain.
   const sl::BufferType depthType = sl::kBufferTypeDepth;
   // Lifecycle: all RR inputs use eValidUntilEvaluate. The caller transitions
   // depth and mvec back to UAV state immediately after Evaluate returns

@@ -184,14 +184,6 @@ struct WavefrontHitRecordGpu {
   uint32_t packedState;
   uint32_t reserved;
   float surface[4];
-};
-static_assert(sizeof(WavefrontHitRecordGpu) == 60,
-              "WavefrontHitRecordGpu must stay tightly packed.");
-
-// DLSS-RR guide data, split out of the hit record (shader ABI v6). Same
-// index space as the hit queue; written by the primary raygen only when RR
-// or the primary-guide feature is active.
-struct WavefrontGuideRecordGpu {
   float guideOrigin[3];
   uint32_t guidePackedState;
   float guideDirection[3];
@@ -203,8 +195,8 @@ struct WavefrontGuideRecordGpu {
   uint32_t guidePackedSpecular;
   float guideSurface[4];
 };
-static_assert(sizeof(WavefrontGuideRecordGpu) == 68,
-              "WavefrontGuideRecordGpu must stay tightly packed.");
+static_assert(sizeof(WavefrontHitRecordGpu) == 128,
+              "WavefrontHitRecordGpu must stay tightly packed.");
 
 struct WavefrontShadowTaskGpu {
   float origin[3];
@@ -233,10 +225,9 @@ struct WavefrontDispatchRaysRecordGpu {
 static_assert(sizeof(WavefrontDispatchRaysRecordGpu) == 112,
               "WavefrontDispatchRaysRecordGpu must match indirect buffer stride.");
 
-static constexpr UINT kWavefrontAbiVersion = 6;
+static constexpr UINT kWavefrontAbiVersion = 7;
 static constexpr UINT kWavefrontPathStateDwords = 12;
-static constexpr UINT kWavefrontHitRecordDwords = 15;
-static constexpr UINT kWavefrontGuideRecordDwords = 17;
+static constexpr UINT kWavefrontHitRecordDwords = 32;
 static constexpr UINT kWavefrontShadowTaskDwords = 12;
 static constexpr UINT kWavefrontDispatchArgsDwords = 4;
 static constexpr UINT kWavefrontQueueCounterCount = 16;
@@ -286,7 +277,7 @@ static const char *WavefrontQueueProfileName(WavefrontQueueProfile profile) {
   }
   return "unknown";
 }
-static_assert(kWavefrontAbiVersion == 6,
+static_assert(kWavefrontAbiVersion == 7,
               "Bump shader WAVEFRONT_ABI_VERSION and docs with ABI changes.");
 static_assert(sizeof(WavefrontPathStateGpu) / sizeof(uint32_t) ==
                   kWavefrontPathStateDwords,
@@ -294,9 +285,6 @@ static_assert(sizeof(WavefrontPathStateGpu) / sizeof(uint32_t) ==
 static_assert(sizeof(WavefrontHitRecordGpu) / sizeof(uint32_t) ==
                   kWavefrontHitRecordDwords,
               "CPU HitRecord dword count must match the shader ABI.");
-static_assert(sizeof(WavefrontGuideRecordGpu) / sizeof(uint32_t) ==
-                  kWavefrontGuideRecordDwords,
-              "CPU GuideRecord dword count must match the shader ABI.");
 static_assert(sizeof(WavefrontShadowTaskGpu) / sizeof(uint32_t) ==
                   kWavefrontShadowTaskDwords,
               "CPU ShadowTask dword count must match the shader ABI.");
@@ -320,7 +308,7 @@ static const UINT DXR_HEAP_TEX_OFFSET = 0;
 static const UINT DXR_HEAP_VB_OFFSET = DXR_HEAP_TEX_OFFSET + DXR_HEAP_TEX_COUNT;
 static const UINT DXR_HEAP_IB_OFFSET = DXR_HEAP_VB_OFFSET + DXR_HEAP_VB_COUNT;
 static const UINT DXR_HEAP_UAV_OFFSET = DXR_HEAP_IB_OFFSET + DXR_HEAP_IB_COUNT;
-static const UINT DXR_HEAP_UAV_COUNT = 38; // u0..u37 (ReGIR cells at u36; wavefront guide queue at u37)
+static const UINT DXR_HEAP_UAV_COUNT = 38; // u0..u36 used; u37 reserved
 static const UINT DXR_HEAP_ACCUM_UAV_OFFSET = DXR_HEAP_UAV_OFFSET + 1;
 static const UINT DXR_HEAP_RESERVOIR_0_OFFSET = DXR_HEAP_UAV_OFFSET + 2;
 static const UINT DXR_HEAP_RESERVOIR_1_OFFSET = DXR_HEAP_UAV_OFFSET + 3;
@@ -370,7 +358,6 @@ static const UINT DXR_HEAP_OIDN_ALBEDO_GUIDE_OFFSET =
 static const UINT DXR_HEAP_OIDN_NORMAL_GUIDE_OFFSET =
     DXR_HEAP_UAV_OFFSET + 35;
 static const UINT DXR_HEAP_REGIR_CELLS_OFFSET = DXR_HEAP_UAV_OFFSET + 36;
-static const UINT DXR_HEAP_WAVEFRONT_GUIDE_OFFSET = DXR_HEAP_UAV_OFFSET + 37;
 
 // Dedicated SRV blocks after UAV range so UAV registers stay stable.
 static const UINT DXR_HEAP_ENV_SRV_OFFSET =
@@ -820,7 +807,6 @@ static ComPtr<ID3D12Resource> s_wavefrontQueueCountersBuffer;
 static ComPtr<ID3D12Resource> s_wavefrontPathQueueABuffer;
 static ComPtr<ID3D12Resource> s_wavefrontPathQueueBBuffer;
 static ComPtr<ID3D12Resource> s_wavefrontHitQueueBuffer;
-static ComPtr<ID3D12Resource> s_wavefrontGuideQueueBuffer;
 static ComPtr<ID3D12Resource> s_wavefrontShadowQueueBuffer;
 static ComPtr<ID3D12Resource> s_wavefrontDispatchArgsBuffer;
 static ComPtr<ID3D12Resource> s_wavefrontStatsBuffer;
@@ -5353,11 +5339,6 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
                   sizeof(WavefrontHitRecordGpu),
                   DXR_HEAP_WAVEFRONT_HIT_OFFSET,
                   L"Wavefront Hit Queue");
-    CreateStructuredBufferUav(s_wavefrontGuideQueueBuffer,
-                  s_wavefrontHitQueueCapacity,
-                  sizeof(WavefrontGuideRecordGpu),
-                  DXR_HEAP_WAVEFRONT_GUIDE_OFFSET,
-                  L"Wavefront Guide Queue");
     CreateStructuredBufferUav(s_wavefrontShadowQueueBuffer,
                   s_wavefrontShadowQueueCapacity,
                   sizeof(WavefrontShadowTaskGpu),
@@ -7438,8 +7419,6 @@ GpuMemoryBreakdown GetGpuMemoryBreakdown() {
   addResource(s_wavefrontPathQueueBBuffer.Get(),
               breakdown.wavefrontQueueBytes);
   addResource(s_wavefrontHitQueueBuffer.Get(), breakdown.wavefrontQueueBytes);
-  addResource(s_wavefrontGuideQueueBuffer.Get(),
-              breakdown.wavefrontQueueBytes);
   addResource(s_wavefrontShadowQueueBuffer.Get(),
               breakdown.wavefrontQueueBytes);
   addResource(s_wavefrontDispatchArgsBuffer.Get(),
@@ -8056,7 +8035,7 @@ static void DispatchReGIRUpdate(ID3D12GraphicsCommandList4 *list,
   // Root CBV (b0): ReGIR constants
   list->SetComputeRootConstantBufferView(
       0, s_regirConstantsBuffer->GetGPUVirtualAddress());
-  // UAV table (u36-u37)
+  // UAV table (u36)
   list->SetComputeRootDescriptorTable(
       1, GetDxrHeapGpuHandle(DXR_HEAP_REGIR_CELLS_OFFSET));
   // SRV (t5001): light bounds
@@ -10154,13 +10133,14 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
                          D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     }
     const bool resetHistory = frameResetHistory;
+    // The buffer contains reflected-hit motion only while the optional probe
+    // is active. Otherwise it contains ordinary primary surface motion, which
+    // RR must not interpret as authoritative reflected geometry.
+    ID3D12Resource *rrSpecularHitDistance =
+        s_dlssSpecularProbeEnabled ? s_specHitDistanceUAV.Get() : nullptr;
+    ID3D12Resource *rrSpecularMotionVectors =
+        s_dlssSpecularProbeEnabled ? s_specularMotionVectorsUAV.Get() : nullptr;
 
-    // Both specularHitDistance and specularMotionVectors are now produced
-    // by the wavefront resolve pass via a mirror-direction RayQuery probe
-    // (see wavefront_resolve_primary_cs.hlsl). Streamline prefers spec mvec
-    // when both are present (per ProgrammingGuideDLSS_RR.md §4.1.8/§4.1.9)
-    // and falls back to spec hit distance + the worldToCameraView /
-    // cameraViewToWorld matrices set in DLSSDOptions otherwise.
     if (s_streamline->Evaluate(
             dxrList.Get(), s_outputUAV.Get(),
             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
@@ -10173,9 +10153,9 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
             s_specularAlbedoUAV.Get(),
             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-            s_specHitDistanceUAV.Get(),
+            rrSpecularHitDistance,
             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-            s_specularMotionVectorsUAV.Get(),
+            rrSpecularMotionVectors,
             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, resetHistory,
             jitterX, jitterY)) {
       usedDlss = true;

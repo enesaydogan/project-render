@@ -625,10 +625,9 @@ struct WavefrontPathState
     uint packedState;
 };
 
-static const uint WAVEFRONT_ABI_VERSION = 6u;
+static const uint WAVEFRONT_ABI_VERSION = 7u;
 static const uint WAVEFRONT_PATH_STATE_DWORDS = 12u;
-static const uint WAVEFRONT_HIT_RECORD_DWORDS = 15u;
-static const uint WAVEFRONT_GUIDE_RECORD_DWORDS = 17u;
+static const uint WAVEFRONT_HIT_RECORD_DWORDS = 32u;
 static const uint WAVEFRONT_SHADOW_TASK_DWORDS = 12u;
 static const uint WAVEFRONT_DISPATCH_ARGS_DWORDS = 4u;
 static const uint WAVEFRONT_QUEUE_PATH_A = 0u;
@@ -653,15 +652,9 @@ struct WavefrontHitRecord
     uint packedState;
     uint reserved;
     float4 surface;
-};
 
-// DLSS-RR guide data, split out of WavefrontHitRecord into its own queue
-// (same index as the hit record). Only the primary raygen writes it — and
-// only when RR or the primary-guide feature is active — and only the primary
-// resolve's RR block reads it. Keeping it out of the hit record halves the
-// hit-queue traffic for every secondary/GI ray.
-struct WavefrontGuideRecord
-{
+// DLSS-RR guide data stays in the hit record so both are published and
+// consumed as one queue item across material-bin scheduling.
     float3 guideOrigin;
     uint guidePackedState;
     float3 guideDirection;
@@ -715,7 +708,6 @@ RWStructuredBuffer<WavefrontDispatchArgs> g_wavefrontDispatchArgs : register(u30
 RWStructuredBuffer<uint> g_wavefrontStats : register(u31);
 RWStructuredBuffer<uint4> g_wavefrontReserved : register(u32);
 RWStructuredBuffer<uint> g_wavefrontMaterialBinIndices : register(u33);
-RWStructuredBuffer<WavefrontGuideRecord> g_wavefrontGuideQueue : register(u37);
 
 static const uint WAVEFRONT_RESERVED_SECONDARY_DISPATCH_CONFIG_INDEX = 6u;
 static const uint WAVEFRONT_QUEUE_FLAG_SOURCE_IS_A = 0x1u;
@@ -826,7 +818,7 @@ inline bool WavefrontHitRecordIsMiss(WavefrontHitRecord record)
            record.hitT < 0.0;
 }
 
-inline bool WavefrontGuideRecordIsMiss(WavefrontGuideRecord record)
+inline bool WavefrontHitRecordGuideIsMiss(WavefrontHitRecord record)
 {
     return (record.guidePackedState & WAVEFRONT_GUIDE_STATE_MISS) != 0u ||
            record.guideHitT < 0.0;
@@ -882,7 +874,7 @@ inline float4 WavefrontHitRecordSurface(WavefrontHitRecord record)
     return saturate(record.surface);
 }
 
-inline float4 WavefrontGuideRecordSurface(WavefrontGuideRecord record)
+inline float4 WavefrontHitRecordGuideSurface(WavefrontHitRecord record)
 {
     return saturate(record.guideSurface);
 }

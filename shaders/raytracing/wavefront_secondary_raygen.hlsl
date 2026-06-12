@@ -124,9 +124,17 @@ void WavefrontSecondaryRayGen()
             0u),
         payload.packedParallaxSelfShadow / 255.0);
     record.surface = payloadSurface;
-    // No guide write: guide records are a primary-bounce/RR concept and the
-    // secondary resolve never reads them.
-
+    record.guideOrigin = state.origin;
+    record.guidePackedState =
+        (payload.t < 0.0) ? WAVEFRONT_GUIDE_STATE_MISS : 0u;
+    record.guideDirection = traceDirection;
+    record.guideHitT = payload.t;
+    record.guidePackedNormal = payload.packedNormal;
+    record.guidePackedAlbedo = payload.packedAlbedo;
+    record.guidePackedIorType = payload.packedIorType;
+    record.guidePackedTransmission = payload.packedTransmission;
+    record.guidePackedSpecular = payload.packedSpecular;
+    record.guideSurface = payloadSurface;
     const bool isMiss = (payload.t < 0.0);
     if (isMiss) {
         record.packedState |= WAVEFRONT_HIT_STATE_MISS;

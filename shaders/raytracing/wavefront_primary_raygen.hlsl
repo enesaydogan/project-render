@@ -91,22 +91,16 @@ void WavefrontPrimaryRayGen()
         payload.packedParallaxSelfShadow / 255.0);
     record.surface = payloadSurface;
 
-    // Guide data lives in its own queue and is only consumed by the primary
-    // resolve's RR block; skip the write entirely when nothing will read it.
-    if (needsPrimaryGuide || dlssRayReconstruction > 0.5) {
-        WavefrontGuideRecord guideRecord;
-        guideRecord.guideOrigin = guideOrigin;
-        guideRecord.guidePackedState = guideState;
-        guideRecord.guideDirection = guideDirection;
-        guideRecord.guideHitT = guidePayload.t;
-        guideRecord.guidePackedNormal = guidePayload.packedNormal;
-        guideRecord.guidePackedAlbedo = guidePayload.packedAlbedo;
-        guideRecord.guidePackedIorType = guidePayload.packedIorType;
-        guideRecord.guidePackedTransmission = guidePayload.packedTransmission;
-        guideRecord.guidePackedSpecular = guidePayload.packedSpecular;
-        guideRecord.guideSurface = guidePayload.surface;
-        g_wavefrontGuideQueue[pathIndex] = guideRecord;
-    }
+    record.guideOrigin = guideOrigin;
+    record.guidePackedState = guideState;
+    record.guideDirection = guideDirection;
+    record.guideHitT = guidePayload.t;
+    record.guidePackedNormal = guidePayload.packedNormal;
+    record.guidePackedAlbedo = guidePayload.packedAlbedo;
+    record.guidePackedIorType = guidePayload.packedIorType;
+    record.guidePackedTransmission = guidePayload.packedTransmission;
+    record.guidePackedSpecular = guidePayload.packedSpecular;
+    record.guideSurface = guidePayload.surface;
 
     const bool isMiss = (payload.t < 0.0);
     if (isMiss) {

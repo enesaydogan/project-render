@@ -23,6 +23,16 @@ inline uint2 WavefrontPixelCoord(uint pixelIndex)
     return uint2(pixelIndex % outputWidth, pixelIndex / outputWidth);
 }
 
+inline float WavefrontDeviceDepth(float viewZ)
+{
+    if (viewZ <= 0.0) {
+        return 1.0;
+    }
+    const float A = farZ / max(farZ - nearZ, 1.0e-6);
+    const float B = (-nearZ * farZ) / max(farZ - nearZ, 1.0e-6);
+    return saturate(A + B / viewZ);
+}
+
 inline bool WavefrontReservoirFlip()
 {
     return (((uint)globalFrameCount) & 1u) == 1u;
@@ -1614,7 +1624,10 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
              1.0e-4)
             ? 1.0
             : 0.0;
-    float depth = (dlssRayReconstruction > 0.5) ? farZ : 1.0;
+    // g_depth is tagged as kBufferTypeDepth for Streamline and must always
+    // contain normalized device depth. True view-space depth lives separately
+    // in g_linearDepth.
+    float depth = 1.0;
     float linearDepth = farZ;
     float2 motion = ComputeWavefrontSkyMotion(rayDir, currScreen);
 
@@ -1766,15 +1779,7 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
         if (preserveDepth > 0.0) {
             linearDepth = preserveDepth;
         }
-        if (viewZ > 0.0) {
-            if (dlssRayReconstruction > 0.5) {
-                depth = viewZ;
-            } else {
-                float A = farZ / (farZ - nearZ);
-                float B = (-nearZ * farZ) / (farZ - nearZ);
-                depth = saturate(A + (B / viewZ));
-            }
-        }
+        depth = WavefrontDeviceDepth(viewZ);
 
         uint surfaceStatPrevious = 0u;
         InterlockedAdd(g_wavefrontStats[9], 1u, surfaceStatPrevious);
@@ -2114,10 +2119,9 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     }
 
     if (dlssRayReconstruction > 0.5) {
-        WavefrontGuideRecord guideRecord = g_wavefrontGuideQueue[pathIndex];
-        if (WavefrontGuideRecordIsMiss(guideRecord)) {
-            float3 guideSkyDir = normalize(guideRecord.guideDirection);
-            depth = farZ;
+        if (WavefrontHitRecordGuideIsMiss(record)) {
+            float3 guideSkyDir = normalize(record.guideDirection);
+            depth = 1.0;
             linearDepth = farZ;
             motion = ComputeWavefrontSkyMotion(guideSkyDir, currScreen);
             normal = float3(0.0, 1.0, 0.0);
@@ -2132,23 +2136,23 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             rrSpecHitDistance = 0.0;
             rrSpecMotion = kInvalidMvec;
         } else {
-            float3 guideDir = normalize(guideRecord.guideDirection);
+            float3 guideDir = normalize(record.guideDirection);
             float3 guideHitPos =
-                guideRecord.guideOrigin + guideDir * guideRecord.guideHitT;
+                record.guideOrigin + guideDir * record.guideHitT;
             float3 guideNormal =
-                UnpackNormalOctahedron(guideRecord.guidePackedNormal);
+                UnpackNormalOctahedron(record.guidePackedNormal);
             float3 guideAlbedo =
-                UnpackPayloadAlbedo(guideRecord.guidePackedAlbedo);
-            float4 guideSurface = WavefrontGuideRecordSurface(guideRecord);
+                UnpackPayloadAlbedo(record.guidePackedAlbedo);
+            float4 guideSurface = WavefrontHitRecordGuideSurface(record);
             float guideRoughness = saturate(guideSurface.x);
             float guideMetallic = saturate(guideSurface.y);
             float guideTransmission = saturate(guideSurface.z);
             float guideSpecularWeight =
                 saturate(UnpackPayloadSpecularWeight(
-                    guideRecord.guidePackedIorType));
-            float guideIor = UnpackPayloadIor(guideRecord.guidePackedIorType);
+                    record.guidePackedIorType));
+            float guideIor = UnpackPayloadIor(record.guidePackedIorType);
             float3 guideSpecularColor =
-                UnpackPayloadSpecularColor(guideRecord.guidePackedSpecular);
+                UnpackPayloadSpecularColor(record.guidePackedSpecular);
 
             normal = guideNormal;
             albedo = guideAlbedo;
@@ -2168,18 +2172,14 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             float viewZ = dot(guideHitPos - camPos, forwardDir);
             float preserveDepth =
                 (projectionMode >= CAMERA_PROJECTION_SPHERICAL_360 - 0.5)
-                    ? guideRecord.guideHitT
+                    ? record.guideHitT
                     : viewZ;
             if (preserveDepth > 0.0) {
                 linearDepth = preserveDepth;
             } else {
                 linearDepth = farZ;
             }
-            if (viewZ > 0.0) {
-                depth = viewZ;
-            } else {
-                depth = farZ;
-            }
+            depth = WavefrontDeviceDepth(viewZ);
 
             float3 guideF0 = ComputeWavefrontSurfaceF0(
                 guideAlbedo, guideMetallic, guideIor, guideSpecularWeight,
