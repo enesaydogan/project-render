@@ -7,6 +7,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <deque>
+#include <map>
 #include <mutex>
 #include <set>
 #include <thread>
@@ -60,16 +61,25 @@ struct CookService::Impl {
         job = std::move(jobs.front());
         jobs.pop_front();
       }
-      Completion c;
-      c.id = job.id;
-      c.ok = !job.outputs.empty();
+      std::map<AssetId, Completion> completions;
       for (const CookService::Output &output : job.outputs) {
+        const AssetId outputId = output.assetId.valid() ? output.assetId : job.id;
+        auto [it, inserted] = completions.try_emplace(outputId);
+        Completion &c = it->second;
+        if (inserted) {
+          c.id = outputId;
+          c.ok = true;
+        }
         std::vector<uint8_t> blob =
             output.produce ? output.produce() : std::vector<uint8_t>();
         const bool outputOk =
             !blob.empty() && WriteCookedFile(output.path, blob);
         c.ok = c.ok && outputOk;
         if (outputOk) {
+          if (!output.stagedPath.empty()) {
+            std::error_code ec;
+            std::filesystem::remove(output.stagedPath, ec);
+          }
           const uint64_t outputHash = HashBytes(blob.data(), blob.size());
           c.hash ^= outputHash + 0x9e3779b97f4a7c15ull + (c.hash << 6) +
                     (c.hash >> 2);
@@ -78,7 +88,8 @@ struct CookService::Impl {
       }
       {
         std::lock_guard<std::mutex> lk(mtx);
-        done.push_back(c);
+        for (auto &entry : completions)
+          done.push_back(std::move(entry.second));
       }
       inFlight.fetch_sub(1, std::memory_order_acq_rel);
     }
@@ -108,6 +119,11 @@ void CookService::EnqueueBatch(const AssetId &id,
     std::lock_guard<std::mutex> lk(m_impl->mtx);
     if (m_impl->pendingIds.find(id) != m_impl->pendingIds.end())
       return;
+    for (const Output &output : outputs) {
+      const AssetId outputId = output.assetId.valid() ? output.assetId : id;
+      if (m_impl->pendingIds.find(outputId) != m_impl->pendingIds.end())
+        return;
+    }
     const size_t previous =
         m_impl->inFlight.fetch_add(1, std::memory_order_acq_rel);
     if (previous == 0) {
@@ -117,6 +133,10 @@ void CookService::EnqueueBatch(const AssetId &id,
       m_impl->workTotal.fetch_add(outputs.size(), std::memory_order_acq_rel);
     }
     m_impl->pendingIds.insert(id);
+    for (const Output &output : outputs) {
+      if (output.assetId.valid())
+        m_impl->pendingIds.insert(output.assetId);
+    }
     m_impl->jobs.push_back({id, std::move(outputs)});
   }
   m_impl->cv.notify_one();

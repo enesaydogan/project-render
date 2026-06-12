@@ -61,6 +61,7 @@ bool AssetPaths::EnsureLayout() const {
       cacheDir() / "Textures",
       cacheDir() / "Materials",
       cacheDir() / "Volumes",
+      pendingCookDir(),
       thumbnailsDir(),
       packsDir(),
   };

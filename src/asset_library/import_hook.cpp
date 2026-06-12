@@ -8,12 +8,18 @@
 #include "global_registry.h"
 #include "vdb_import.h"
 
+#include "../material/material_io.h"
+
 #include <algorithm>
 #include <cctype>
 #include <climits>
 #include <filesystem>
 #include <iomanip>
+#include <map>
+#include <memory>
+#include <mutex>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <regex>
 #include <sstream>
 #include <system_error>
@@ -472,6 +478,208 @@ AssetId ImportVdbFileToLibrary(const std::string &path,
 
 namespace {
 
+std::vector<AssetId>
+ModelBundleTextureIds(const AssetRegistry &registry,
+                      const AssetMetadata &modelMetadata) {
+  std::vector<AssetId> ids;
+  try {
+    const json settings = json::parse(modelMetadata.importSettingsJson);
+    if (settings.contains("cookBundle") &&
+        settings["cookBundle"].is_object()) {
+      const json &bundle = settings["cookBundle"];
+      if (bundle.contains("textureIds") &&
+          bundle["textureIds"].is_array()) {
+        for (const json &value : bundle["textureIds"]) {
+          AssetId id;
+          if (value.is_string() &&
+              AssetId::FromString(value.get<std::string>(), id) &&
+              registry.Get(id)) {
+            ids.push_back(id);
+          }
+        }
+      }
+    }
+  } catch (...) {
+  }
+  if (!ids.empty())
+    return ids;
+
+  // Registries created before cook-bundle metadata used deterministic names.
+  // Recover that index mapping once, then persist it below for future starts.
+  const std::string prefix = modelMetadata.displayName + " Tex ";
+  std::map<size_t, AssetId> indexed;
+  for (const AssetId &id : registry.AllAssets()) {
+    const AssetMetadata *metadata = registry.Get(id);
+    if (!metadata || metadata->type != AssetType::Texture ||
+        metadata->displayName.rfind(prefix, 0) != 0) {
+      continue;
+    }
+    const std::string suffix = metadata->displayName.substr(prefix.size());
+    if (suffix.empty() ||
+        !std::all_of(suffix.begin(), suffix.end(),
+                     [](unsigned char c) { return std::isdigit(c) != 0; })) {
+      continue;
+    }
+    try {
+      indexed.emplace(static_cast<size_t>(std::stoull(suffix)), id);
+    } catch (...) {
+    }
+  }
+  if (indexed.empty())
+    return ids;
+  ids.resize(indexed.rbegin()->first + 1);
+  for (const auto &[index, id] : indexed)
+    ids[index] = id;
+  return ids;
+}
+
+bool ModelBundleNeedsRepair(const AssetRegistry &registry,
+                            const AssetPaths &paths,
+                            const AssetMetadata &modelMetadata) {
+  for (const AssetId &materialId : modelMetadata.dependencies) {
+    const AssetMetadata *material = registry.Get(materialId);
+    std::error_code ec;
+    if (!material || material->cookState != CookState::Current ||
+        !std::filesystem::exists(paths.cookedMaterialPath(materialId), ec) ||
+        ec) {
+      return true;
+    }
+    for (const AssetId &textureId : material->dependencies) {
+      const AssetMetadata *texture = registry.Get(textureId);
+      if (!texture || texture->cookState != CookState::Current ||
+          !ValidateCookedFileHeader(paths.cookedTexturePath(textureId),
+                                    CookedPayloadKind::Texture)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+bool EnqueueModelBundleRecook(AssetRegistry &registry, const AssetPaths &paths,
+                              const AssetId &modelId,
+                              const AssetMetadata &modelMetadata) {
+  struct DecodeState {
+    std::once_flag once;
+    std::string sourcePath;
+    bool loaded = false;
+    std::vector<Asset::GpuMesh> meshes;
+    std::vector<Asset::Material> materials;
+    std::vector<Asset::Texture> textures;
+
+    void Decode() {
+      std::call_once(once, [this]() {
+        const bool previousDefer = Asset::GetDeferGpuUpload();
+        Asset::SetDeferGpuUpload(true);
+        loaded = Asset::LoadModel(sourcePath, meshes, &materials, &textures);
+        Asset::SetDeferGpuUpload(previousDefer);
+      });
+    }
+  };
+
+  const std::vector<AssetId> textureIds =
+      ModelBundleTextureIds(registry, modelMetadata);
+  const std::vector<AssetId> materialIds = modelMetadata.dependencies;
+  auto decoded = std::make_shared<DecodeState>();
+  decoded->sourcePath = modelMetadata.sourcePath;
+
+  std::vector<CookService::Output> outputs;
+  outputs.reserve(materialIds.size() + textureIds.size() + 1);
+
+  // Small material outputs go first so progress advances immediately after
+  // the one source decode instead of appearing stuck during model compression.
+  for (size_t index = 0; index < materialIds.size(); ++index) {
+    const AssetId materialId = materialIds[index];
+    const AssetMetadata *materialMetadata = registry.Get(materialId);
+    if (!materialMetadata)
+      continue;
+    const std::vector<AssetId> dependencies = materialMetadata->dependencies;
+    outputs.push_back(
+        {paths.cookedMaterialPath(materialId),
+         [decoded, index, dependencies]() {
+           decoded->Decode();
+           if (!decoded->loaded || index >= decoded->materials.size())
+             return std::vector<uint8_t>();
+           const Asset::Material &material = decoded->materials[index];
+           const std::vector<Asset::Material> one = {material};
+           const std::vector<int> remap =
+               MaterialIO::BuildTextureSaveRemap(decoded->textures, one);
+           json doc;
+           doc["material"] = MaterialIO::BuildMaterialsMetadata(one, remap);
+           doc["textures"] = json::array();
+           for (const AssetId &textureId : dependencies)
+             doc["textures"].push_back(textureId.ToString());
+           const std::string text = doc.dump();
+           return std::vector<uint8_t>(text.begin(), text.end());
+         },
+         materialId});
+  }
+
+  for (size_t index = 0; index < textureIds.size(); ++index) {
+    const AssetId textureId = textureIds[index];
+    if (!textureId.valid() || !registry.Get(textureId))
+      continue;
+    outputs.push_back(
+        {paths.cookedTexturePath(textureId),
+         [decoded, index]() {
+           decoded->Decode();
+           std::vector<uint8_t> blob;
+           if (decoded->loaded && index < decoded->textures.size())
+             SerializeCookedTexture(ToCookedTexture(decoded->textures[index]),
+                                    blob);
+           return blob;
+         },
+         textureId});
+  }
+
+  outputs.push_back(
+      {paths.cookedMeshPath(modelId),
+       [decoded]() {
+         decoded->Decode();
+         std::vector<uint8_t> blob;
+         if (decoded->loaded && !decoded->meshes.empty())
+           SerializeCookedModel(ToCookedModel(decoded->meshes), blob);
+         return blob;
+       },
+       modelId});
+
+  if (outputs.empty())
+    return false;
+
+  for (const AssetId &id : materialIds) {
+    if (const AssetMetadata *metadata = registry.Get(id)) {
+      AssetMetadata updated = *metadata;
+      updated.cookState = CookState::Stale;
+      registry.Update(updated);
+    }
+  }
+  for (const AssetId &id : textureIds) {
+    if (const AssetMetadata *metadata = registry.Get(id)) {
+      AssetMetadata updated = *metadata;
+      updated.cookState = CookState::Stale;
+      registry.Update(updated);
+    }
+  }
+
+  AssetMetadata updatedModel = modelMetadata;
+  updatedModel.cookState = CookState::Stale;
+  json settings = json::object();
+  try {
+    settings = json::parse(updatedModel.importSettingsJson);
+    if (!settings.is_object())
+      settings = json::object();
+  } catch (...) {
+  }
+  settings["cookBundle"]["textureIds"] = json::array();
+  for (const AssetId &id : textureIds)
+    settings["cookBundle"]["textureIds"].push_back(id.ToString());
+  updatedModel.importSettingsJson = settings.dump();
+  registry.Update(updatedModel);
+
+  CookService::Get().EnqueueBatch(modelId, std::move(outputs));
+  return true;
+}
+
 // Enqueue a background recook of one asset from its source file. The produce
 // lambda runs on the cook worker and must not touch the registry; it captures
 // everything it needs by value (same contract as the import-time cooks).
@@ -545,7 +753,73 @@ ResumeCookStats ResumePendingCooks() {
   registry->RefreshSourceStates();
   bool changed = false;
 
-  for (const AssetId &id : registry->AllAssets()) {
+  std::vector<AssetId> assetIds = registry->AllAssets();
+  std::stable_sort(assetIds.begin(), assetIds.end(),
+                   [registry](const AssetId &a, const AssetId &b) {
+                     const AssetMetadata *ma = registry->Get(a);
+                     const AssetMetadata *mb = registry->Get(b);
+                     const bool aModel = ma && ma->type == AssetType::Model;
+                     const bool bModel = mb && mb->type == AssetType::Model;
+                     return aModel && !bModel;
+                   });
+
+  // Durable checkpoints are authoritative: they contain the exact imported
+  // CPU payload captured before scene state could be cleared. Promote these
+  // first so derived materials/textures never get misclassified as sourceless.
+  for (const AssetId &id : assetIds) {
+    const AssetMetadata *metadata = registry->Get(id);
+    if (!metadata || metadata->fromPack)
+      continue;
+    const std::filesystem::path stagedPath = paths.pendingCookPath(id);
+    std::error_code ec;
+    if (!std::filesystem::exists(stagedPath, ec) || ec)
+      continue;
+
+    std::filesystem::path finalPath;
+    std::optional<CookedPayloadKind> payloadKind;
+    switch (metadata->type) {
+    case AssetType::Model:
+      finalPath = paths.cookedMeshPath(id);
+      payloadKind = CookedPayloadKind::Model;
+      break;
+    case AssetType::Texture:
+      finalPath = paths.cookedTexturePath(id);
+      payloadKind = CookedPayloadKind::Texture;
+      break;
+    case AssetType::Material:
+      finalPath = paths.cookedMaterialPath(id);
+      break;
+    case AssetType::Volume:
+      finalPath = paths.cookedVolumePath(id);
+      payloadKind = CookedPayloadKind::Volume;
+      break;
+    default:
+      continue;
+    }
+
+    AssetMetadata updated = *metadata;
+    updated.cookState = CookState::Stale;
+    registry->Update(updated);
+    cook.EnqueueBatch(
+        id, {{finalPath,
+              [stagedPath, payloadKind]() {
+                std::vector<uint8_t> staged;
+                ReadCookedFile(stagedPath, staged);
+                if (payloadKind) {
+                  std::vector<uint8_t> compressed;
+                  if (RecompressCookedPayload(staged, *payloadKind,
+                                              compressed)) {
+                    return compressed;
+                  }
+                }
+                return staged;
+              },
+              id, stagedPath}});
+    stats.requeued++;
+    changed = true;
+  }
+
+  for (const AssetId &id : assetIds) {
     const AssetMetadata *meta = registry->Get(id);
     if (!meta || meta->fromPack)
       continue;
@@ -584,6 +858,19 @@ ResumeCookStats ResumePendingCooks() {
       break;
     default:
       continue; // registry-only entry types have no cooked payload
+    }
+
+    const bool sourceAvailable =
+        !meta->sourcePath.empty() &&
+        std::filesystem::exists(NativeSourcePath(meta->sourcePath), ec) && !ec;
+
+    if (meta->type == AssetType::Model && sourceAvailable &&
+        ModelBundleNeedsRepair(*registry, paths, *meta)) {
+      if (EnqueueModelBundleRecook(*registry, paths, id, *meta)) {
+        stats.requeued++;
+        changed = true;
+        continue;
+      }
     }
 
     if (meta->cookState == CookState::Current && fileValid)
@@ -644,16 +931,17 @@ ResumeCookStats ResumePendingCooks() {
     // 2) Recook from the source file when it is reachable. Materials have no
     //    standalone source (their payload derives from the model import), so
     //    they are excluded here.
-    const bool sourceAvailable =
-        !meta->sourcePath.empty() &&
-        std::filesystem::exists(NativeSourcePath(meta->sourcePath), ec) && !ec;
     if (sourceAvailable && meta->type != AssetType::Material) {
       AssetMetadata updated = *meta;
       updated.cookState = CookState::Stale;
       registry->Update(updated);
       changed = true;
-      EnqueueRecookFromSource(paths, id, meta->type, meta->sourcePath,
-                              meta->importSettingsJson);
+      if (meta->type == AssetType::Model) {
+        EnqueueModelBundleRecook(*registry, paths, id, *meta);
+      } else {
+        EnqueueRecookFromSource(paths, id, meta->type, meta->sourcePath,
+                                meta->importSettingsJson);
+      }
       stats.requeued++;
       continue;
     }

@@ -19,6 +19,10 @@ public:
   struct Output {
     std::filesystem::path path;
     std::function<std::vector<uint8_t>()> produce;
+    // Optional owner for multi-asset cook bundles. Invalid means the batch id.
+    AssetId assetId;
+    // Removed only after the final output was committed successfully.
+    std::filesystem::path stagedPath;
   };
 
   static CookService &Get();

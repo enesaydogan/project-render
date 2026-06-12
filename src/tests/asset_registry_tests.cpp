@@ -331,6 +331,13 @@ void TestCookedModelRoundTrip() {
   std::vector<uint8_t> garbage = {1, 2, 3, 4, 5, 6, 7, 8,
                                   9, 10, 11, 12, 13, 14, 15, 16};
   CHECK(!DeserializeCookedModel(garbage.data(), garbage.size(), bad));
+
+  std::vector<uint8_t> staged;
+  CHECK(SerializeCookedModelUncompressed(model, staged));
+  std::vector<uint8_t> recompressed;
+  CHECK(RecompressCookedPayload(staged, CookedPayloadKind::Model,
+                                recompressed));
+  CHECK(DeserializeCookedModel(recompressed.data(), recompressed.size(), bad));
 }
 
 void TestCookedTextureRoundTrip() {
@@ -610,6 +617,54 @@ void TestAtomicBatchCook() {
   CHECK(std::filesystem::exists(tmp.path / "frame_2.prvol"));
 }
 
+void TestMultiAssetBatchCook() {
+  std::printf("TestMultiAssetBatchCook\n");
+  TempDir tmp;
+  AssetRegistry registry(AssetPaths(tmp.path));
+  CHECK(registry.Load());
+
+  AssetMetadata model =
+      MakeAsset(AssetType::Model, "Model", "Imported/Models");
+  model.cookState = CookState::Stale;
+  const AssetId modelId = registry.Add(std::move(model));
+
+  AssetMetadata material =
+      MakeAsset(AssetType::Material, "Material", "Imported/Materials");
+  material.cookState = CookState::Stale;
+  const AssetId materialId = registry.Add(std::move(material));
+
+  const std::filesystem::path stagedMaterial = tmp.path / "material.prcook";
+  CHECK(WriteCookedFile(stagedMaterial, {1, 2, 3}));
+  std::vector<CookService::Output> outputs;
+  outputs.push_back({tmp.path / "material.prmat",
+                     [stagedMaterial]() {
+                       std::vector<uint8_t> bytes;
+                       ReadCookedFile(stagedMaterial, bytes);
+                       return bytes;
+                     },
+                     materialId, stagedMaterial});
+  outputs.push_back({tmp.path / "model.prmesh",
+                     []() { return std::vector<uint8_t>{4, 5, 6}; },
+                     modelId});
+
+  CookService &cook = CookService::Get();
+  cook.EnqueueBatch(modelId, std::move(outputs));
+  CHECK(cook.IsPending(modelId));
+  CHECK(cook.IsPending(materialId));
+
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  while (cook.pending() != 0 && std::chrono::steady_clock::now() < deadline)
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  cook.Pump(registry);
+
+  CHECK(!cook.IsPending(modelId));
+  CHECK(!cook.IsPending(materialId));
+  CHECK(registry.Get(modelId)->cookState == CookState::Current);
+  CHECK(registry.Get(materialId)->cookState == CookState::Current);
+  CHECK(!std::filesystem::exists(stagedMaterial));
+}
+
 void TestRuntimeReadinessIncludesDependencies() {
   std::printf("TestRuntimeReadinessIncludesDependencies\n");
   TempDir tmp;
@@ -724,6 +779,7 @@ int main() {
   TestPrPakDedup();
   TestPrPakCorruption();
   TestAtomicBatchCook();
+  TestMultiAssetBatchCook();
   TestRuntimeReadinessIncludesDependencies();
 
   std::printf("\n%d checks, %d failures\n", g_checks, g_failures);

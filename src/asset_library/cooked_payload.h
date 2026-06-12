@@ -74,6 +74,11 @@ struct CookedVolume {
 // Returns false only on a compression failure.
 bool SerializeCookedModel(const CookedModel &model, std::vector<uint8_t> &out);
 bool SerializeCookedTexture(const CookedTexture &tex, std::vector<uint8_t> &out);
+// Fast, uncompressed variants used as durable pending-cook checkpoints.
+bool SerializeCookedModelUncompressed(const CookedModel &model,
+                                      std::vector<uint8_t> &out);
+bool SerializeCookedTextureUncompressed(const CookedTexture &tex,
+                                        std::vector<uint8_t> &out);
 
 // Parse a blob produced by the matching Serialize call. Returns false on bad
 // magic, version mismatch, truncation, or decompression failure.
@@ -81,6 +86,8 @@ bool DeserializeCookedModel(const uint8_t *data, size_t size, CookedModel &out);
 bool DeserializeCookedTexture(const uint8_t *data, size_t size,
                               CookedTexture &out);
 bool SerializeCookedVolume(const CookedVolume &vol, std::vector<uint8_t> &out);
+bool SerializeCookedVolumeUncompressed(const CookedVolume &vol,
+                                       std::vector<uint8_t> &out);
 bool DeserializeCookedVolume(const uint8_t *data, size_t size,
                              CookedVolume &out);
 
@@ -97,6 +104,11 @@ bool ReadCookedFile(const std::filesystem::path &path,
 enum class CookedPayloadKind : uint32_t { Model, Texture, Volume };
 bool ValidateCookedFileHeader(const std::filesystem::path &path,
                               CookedPayloadKind kind);
+// Converts a valid staged payload (typically uncompressed) into the normal
+// compressed cooked representation. Returns false if the staged blob is bad.
+bool RecompressCookedPayload(const std::vector<uint8_t> &staged,
+                             CookedPayloadKind kind,
+                             std::vector<uint8_t> &out);
 
 // FNV-1a 64-bit content hashes used for cache keys / change detection.
 uint64_t HashBytes(const void *data, size_t size);

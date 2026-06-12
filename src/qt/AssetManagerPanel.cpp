@@ -1186,7 +1186,7 @@ void AssetManagerPanel::onClearLibrary() {
   for (const std::filesystem::path &dir :
        {paths.cacheDir() / "Meshes", paths.cacheDir() / "Textures",
         paths.cacheDir() / "Materials", paths.cacheDir() / "Volumes",
-        paths.thumbnailsDir()}) {
+        paths.pendingCookDir(), paths.thumbnailsDir()}) {
     std::filesystem::remove_all(dir, ec);
     std::filesystem::create_directories(dir, ec);
   }

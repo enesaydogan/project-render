@@ -9,6 +9,7 @@
 
 #include <chrono>
 #include <cstring>
+#include <optional>
 #include <system_error>
 #include <unordered_map>
 
@@ -25,6 +26,38 @@ int64_t FileTimestamp(const std::string &path) {
   return static_cast<int64_t>(t.time_since_epoch().count());
 }
 
+void EnqueuePreparedCook(const AssetPaths &paths, const AssetId &id,
+                         const std::filesystem::path &finalPath,
+                         std::vector<uint8_t> bytes,
+                         std::optional<CookedPayloadKind> payloadKind =
+                             std::nullopt) {
+  const std::filesystem::path stagedPath = paths.pendingCookPath(id);
+  if (WriteCookedFile(stagedPath, bytes)) {
+    CookService::Get().EnqueueBatch(
+        id, {{finalPath,
+              [stagedPath, payloadKind]() {
+                std::vector<uint8_t> staged;
+                ReadCookedFile(stagedPath, staged);
+                if (payloadKind) {
+                  std::vector<uint8_t> compressed;
+                  if (RecompressCookedPayload(staged, *payloadKind,
+                                              compressed)) {
+                    return compressed;
+                  }
+                }
+                return staged;
+              },
+              id, stagedPath}});
+    return;
+  }
+
+  // Keep the current session usable if the checkpoint directory is
+  // temporarily unwritable. The registry remains stale and source recovery
+  // will retry on the next launch if the process exits before completion.
+  CookService::Get().Enqueue(
+      id, finalPath, [bytes = std::move(bytes)]() { return bytes; });
+}
+
 // Cook + register a single texture. Returns its AssetId (already added to the
 // registry). cookState is set to Current on success.
 AssetId CookAndRegisterTexture(AssetRegistry &registry, const AssetPaths &paths,
@@ -39,13 +72,10 @@ AssetId CookAndRegisterTexture(AssetRegistry &registry, const AssetPaths &paths,
   m.cookState = CookState::Stale; // worker flips to Current/Failed via Pump()
   AssetId id = registry.Add(std::move(m));
 
-  CookService::Get().Enqueue(
-      id, paths.cookedTexturePath(id),
-      [cooked = ToCookedTexture(tex)]() {
-        std::vector<uint8_t> blob;
-        SerializeCookedTexture(cooked, blob);
-        return blob;
-      });
+  std::vector<uint8_t> blob;
+  SerializeCookedTextureUncompressed(ToCookedTexture(tex), blob);
+  EnqueuePreparedCook(paths, id, paths.cookedTexturePath(id),
+                      std::move(blob), CookedPayloadKind::Texture);
   return id;
 }
 
@@ -90,8 +120,8 @@ AssetId CookAndRegisterMaterial(AssetRegistry &registry, const AssetPaths &paths
   // Material JSON is cheap; build it now and enqueue only the file write.
   std::string text = doc.dump();
   std::vector<uint8_t> bytes(text.begin(), text.end());
-  CookService::Get().Enqueue(id, paths.cookedMaterialPath(id),
-                             [bytes = std::move(bytes)]() { return bytes; });
+  EnqueuePreparedCook(paths, id, paths.cookedMaterialPath(id),
+                      std::move(bytes));
   return id;
 }
 
@@ -205,16 +235,19 @@ RegisterAndCookImport(AssetRegistry &registry, const AssetPaths &paths,
   model.sourceTimestamp = sourcePath.empty() ? 0 : FileTimestamp(sourcePath);
   model.cookerVersion = kCookerVersionMesh;
   model.dependencies = set.materialIds;
+  json bundle;
+  bundle["textureIds"] = json::array();
+  for (const AssetId &id : set.textureIds)
+    bundle["textureIds"].push_back(id.ToString());
+  model.importSettingsJson = json{{"cookBundle", std::move(bundle)}}.dump();
   model.cookState = CookState::Stale;
   set.modelId = registry.Add(std::move(model));
 
-  CookService::Get().Enqueue(
-      set.modelId, paths.cookedMeshPath(set.modelId),
-      [cooked = ToCookedModel(meshes)]() {
-        std::vector<uint8_t> blob;
-        SerializeCookedModel(cooked, blob);
-        return blob;
-      });
+  std::vector<uint8_t> modelBlob;
+  SerializeCookedModelUncompressed(ToCookedModel(meshes), modelBlob);
+  EnqueuePreparedCook(paths, set.modelId,
+                      paths.cookedMeshPath(set.modelId),
+                      std::move(modelBlob), CookedPayloadKind::Model);
   return set;
 }
 
@@ -234,12 +267,10 @@ AssetId RegisterAndCookTexture(AssetRegistry &registry, const AssetPaths &paths,
   m.cookState = CookState::Stale;
   AssetId id = registry.Add(std::move(m));
 
-  CookService::Get().Enqueue(
-      id, paths.cookedTexturePath(id), [cooked = ToCookedTexture(tex)]() {
-        std::vector<uint8_t> blob;
-        SerializeCookedTexture(cooked, blob);
-        return blob;
-      });
+  std::vector<uint8_t> blob;
+  SerializeCookedTextureUncompressed(ToCookedTexture(tex), blob);
+  EnqueuePreparedCook(paths, id, paths.cookedTexturePath(id),
+                      std::move(blob), CookedPayloadKind::Texture);
   return id;
 }
 
@@ -270,12 +301,10 @@ AssetId RegisterAndCookVolume(AssetRegistry &registry, const AssetPaths &paths,
   m.importSettingsJson = stats.dump();
   AssetId id = registry.Add(std::move(m));
 
-  CookService::Get().Enqueue(id, paths.cookedVolumePath(id),
-                             [volume]() {
-                               std::vector<uint8_t> blob;
-                               SerializeCookedVolume(volume, blob);
-                               return blob;
-                             });
+  std::vector<uint8_t> blob;
+  SerializeCookedVolumeUncompressed(volume, blob);
+  EnqueuePreparedCook(paths, id, paths.cookedVolumePath(id), std::move(blob),
+                      CookedPayloadKind::Volume);
   return id;
 }
 

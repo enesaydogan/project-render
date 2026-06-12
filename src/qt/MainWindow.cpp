@@ -1641,8 +1641,11 @@ void MainWindow::createDocks()
     // writable per-user location (e.g. %LOCALAPPDATA%/Project Render on Windows)
     // before any panel that reads it is constructed.
     {
-        const QString dataRoot =
-            QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+        QString dataRoot = qEnvironmentVariable("PROJECT_RENDER_ASSET_ROOT");
+        if (dataRoot.isEmpty()) {
+            dataRoot =
+                QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+        }
         if (!dataRoot.isEmpty())
             assetlib::InitGlobalRegistry(
                 std::filesystem::path(dataRoot.toStdWString()));

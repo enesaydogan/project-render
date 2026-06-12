@@ -33,6 +33,12 @@ public:
   std::filesystem::path thumbnailsDir() const {
     return cacheDir() / "Thumbnails";
   }
+  std::filesystem::path pendingCookDir() const {
+    return cacheDir() / "Pending";
+  }
+  std::filesystem::path pendingCookPath(const AssetId &id) const {
+    return pendingCookDir() / (id.ToString() + ".prcook");
+  }
 
   // Cooked runtime payload locations, keyed by AssetId.
   std::filesystem::path cookedMeshPath(const AssetId &id) const {

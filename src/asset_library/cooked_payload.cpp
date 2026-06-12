@@ -140,10 +140,11 @@ bool DecompressLzms(const uint8_t *src, size_t srcSize, size_t uncompressedSize,
 // Wrap a raw payload in a header (magic + version + compression + size) and
 // compress the body. Falls back to store if compression doesn't help.
 bool Finalize(const uint8_t magic[4], uint32_t version,
-              const std::vector<uint8_t> &payload, std::vector<uint8_t> &out) {
+              const std::vector<uint8_t> &payload, std::vector<uint8_t> &out,
+              bool allowCompression = true) {
   std::vector<uint8_t> compressed;
   uint32_t method = kCompressLzms;
-  if (!CompressLzms(payload, compressed) ||
+  if (!allowCompression || !CompressLzms(payload, compressed) ||
       compressed.size() >= payload.size()) {
     method = kCompressNone;
     compressed = payload;
@@ -183,7 +184,9 @@ bool OpenBlob(const uint8_t *data, size_t size, const uint8_t magic[4],
 
 } // namespace
 
-bool SerializeCookedModel(const CookedModel &model, std::vector<uint8_t> &out) {
+bool SerializeCookedModelImpl(const CookedModel &model,
+                              std::vector<uint8_t> &out,
+                              bool allowCompression) {
   std::vector<uint8_t> payload;
   Writer w(payload);
   w.u32(static_cast<uint32_t>(model.meshes.size()));
@@ -201,7 +204,17 @@ bool SerializeCookedModel(const CookedModel &model, std::vector<uint8_t> &out) {
     w.u32(static_cast<uint32_t>(m.indexBytes.size()));
     w.bytes(m.indexBytes.data(), m.indexBytes.size());
   }
-  return Finalize(kMagicModel, kCookerVersionMesh, payload, out);
+  return Finalize(kMagicModel, kCookerVersionMesh, payload, out,
+                  allowCompression);
+}
+
+bool SerializeCookedModel(const CookedModel &model, std::vector<uint8_t> &out) {
+  return SerializeCookedModelImpl(model, out, true);
+}
+
+bool SerializeCookedModelUncompressed(const CookedModel &model,
+                                      std::vector<uint8_t> &out) {
+  return SerializeCookedModelImpl(model, out, false);
 }
 
 bool DeserializeCookedModel(const uint8_t *data, size_t size,
@@ -236,8 +249,9 @@ bool DeserializeCookedModel(const uint8_t *data, size_t size,
   return true;
 }
 
-bool SerializeCookedTexture(const CookedTexture &tex,
-                            std::vector<uint8_t> &out) {
+bool SerializeCookedTextureImpl(const CookedTexture &tex,
+                                std::vector<uint8_t> &out,
+                                bool allowCompression) {
   std::vector<uint8_t> payload;
   Writer w(payload);
   w.u32(tex.width);
@@ -247,7 +261,18 @@ bool SerializeCookedTexture(const CookedTexture &tex,
   w.u32(tex.usageSemantic);
   w.u32(static_cast<uint32_t>(tex.data.size()));
   w.bytes(tex.data.data(), tex.data.size());
-  return Finalize(kMagicTexture, kCookerVersionTexture, payload, out);
+  return Finalize(kMagicTexture, kCookerVersionTexture, payload, out,
+                  allowCompression);
+}
+
+bool SerializeCookedTexture(const CookedTexture &tex,
+                            std::vector<uint8_t> &out) {
+  return SerializeCookedTextureImpl(tex, out, true);
+}
+
+bool SerializeCookedTextureUncompressed(const CookedTexture &tex,
+                                        std::vector<uint8_t> &out) {
+  return SerializeCookedTextureImpl(tex, out, false);
 }
 
 bool DeserializeCookedTexture(const uint8_t *data, size_t size,
@@ -266,7 +291,9 @@ bool DeserializeCookedTexture(const uint8_t *data, size_t size,
   return r.ok;
 }
 
-bool SerializeCookedVolume(const CookedVolume &vol, std::vector<uint8_t> &out) {
+bool SerializeCookedVolumeImpl(const CookedVolume &vol,
+                               std::vector<uint8_t> &out,
+                               bool allowCompression) {
   std::vector<uint8_t> payload;
   Writer w(payload);
   for (int i = 0; i < 3; ++i)
@@ -302,7 +329,17 @@ bool SerializeCookedVolume(const CookedVolume &vol, std::vector<uint8_t> &out) {
   }
   w.string(vol.densityGridName);
   w.string(vol.temperatureGridName);
-  return Finalize(kMagicVolume, kCookerVersionVolume, payload, out);
+  return Finalize(kMagicVolume, kCookerVersionVolume, payload, out,
+                  allowCompression);
+}
+
+bool SerializeCookedVolume(const CookedVolume &vol, std::vector<uint8_t> &out) {
+  return SerializeCookedVolumeImpl(vol, out, true);
+}
+
+bool SerializeCookedVolumeUncompressed(const CookedVolume &vol,
+                                       std::vector<uint8_t> &out) {
+  return SerializeCookedVolumeImpl(vol, out, false);
 }
 
 bool DeserializeCookedVolume(const uint8_t *data, size_t size,
@@ -452,6 +489,29 @@ bool ValidateCookedFileHeader(const std::filesystem::path &path,
   uint32_t version = 0;
   std::memcpy(&version, header + 4, 4);
   return version == expectedVersion;
+}
+
+bool RecompressCookedPayload(const std::vector<uint8_t> &staged,
+                             CookedPayloadKind kind,
+                             std::vector<uint8_t> &out) {
+  switch (kind) {
+  case CookedPayloadKind::Model: {
+    CookedModel model;
+    return DeserializeCookedModel(staged.data(), staged.size(), model) &&
+           SerializeCookedModel(model, out);
+  }
+  case CookedPayloadKind::Texture: {
+    CookedTexture texture;
+    return DeserializeCookedTexture(staged.data(), staged.size(), texture) &&
+           SerializeCookedTexture(texture, out);
+  }
+  case CookedPayloadKind::Volume: {
+    CookedVolume volume;
+    return DeserializeCookedVolume(staged.data(), staged.size(), volume) &&
+           SerializeCookedVolume(volume, out);
+  }
+  }
+  return false;
 }
 
 uint64_t HashBytes(const void *data, size_t size) {
