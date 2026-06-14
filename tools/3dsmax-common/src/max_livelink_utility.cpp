@@ -5640,9 +5640,21 @@ bool CaptureNodeMeshPayloadJob(Interface *ip, INode *node,
     ReleaseNodeMeshAccess(&meshAccess);
     return false;
   }
+  // A node with no assigned material gets a node-scoped scene-color material
+  // bound into the mesh payload (stable id max-scene-color:<node-guid>). That
+  // binding is node-private -- every instance has its own wire color -- so such
+  // nodes must NOT share a geometry payload with their instances. Two instances
+  // that share geometry and start with the same color would otherwise share one
+  // .prmesh (and thus one scene-color binding) and resolve to a single engine
+  // material; the "color change emits a material update, not a mesh rewrite"
+  // optimization then can't split them, so recoloring one recolors both. Force
+  // a per-node payload for no-material nodes (Phase 1 instanced-color case).
+  const bool hasAssignedMaterial = node->GetMtl() != nullptr;
   job.sharedPayloadKey =
-      BuildSharedPayloadKey(sharedPayloadBaseKey,
-                            job.snapshot.geometryFingerprint);
+      hasAssignedMaterial
+          ? BuildSharedPayloadKey(sharedPayloadBaseKey,
+                                  job.snapshot.geometryFingerprint)
+          : std::string();
   if (!job.sharedPayloadKey.empty()) {
     job.payloadPath = GetSharedPayloadPath(documentId, job.sharedPayloadKey);
   }
