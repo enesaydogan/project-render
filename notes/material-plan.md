@@ -8,7 +8,6 @@ material extraction and synchronization.
 The work covers:
 
 - meshes with no assigned material, using the 3ds Max scene object color;
-- 3ds Max Standard material extraction;
 - 3ds Max Physical Material extraction;
 - bitmap and procedural map support;
 - V-Ray material support;
@@ -135,7 +134,7 @@ This gives broad compatibility but has several problems:
 
 - localized slot names can break classification;
 - unrelated maps can be assigned to the wrong engine slot;
-- Standard and Physical Material semantics are not extracted explicitly;
+- Physical Material semantics are not extracted explicitly;
 - enabled state and per-slot amount are not consistently preserved;
 - reflection/glossiness and metal/roughness workflows can be conflated;
 - bump maps and tangent-space normal maps are not reliably distinguished;
@@ -217,7 +216,6 @@ tools/3dsmax-common/material/
   max_material_context.h
   max_material_extractor.h
   max_material_extractor.cpp
-  max_standard_material_adapter.cpp
   max_physical_material_adapter.cpp
   max_vray_material_adapter.cpp
   max_compound_material_adapter.cpp
@@ -355,14 +353,13 @@ Each material and map family should be assigned a support level:
 Priority is based on common architectural visualization workflows:
 
 1. no-material scene color;
-2. Standard material;
-3. Physical Material;
-4. bitmap, output, normal/bump, color correction, mix, and composite maps;
-5. full core `VRayMtl`;
-6. common V-Ray bitmap, normal, tri-planar, randomization, and composition maps;
-7. common V-Ray compound materials;
-8. geometry-dependent maps;
-9. specialized V-Ray materials.
+2. Physical Material;
+3. bitmap, output, normal/bump, color correction, mix, and composite maps;
+4. full core `VRayMtl`;
+5. common V-Ray bitmap, normal, tri-planar, randomization, and composition maps;
+6. common V-Ray compound materials;
+7. geometry-dependent maps;
+8. specialized V-Ray materials.
 
 ## Phase 0: Baseline and Refactor
 
@@ -464,116 +461,7 @@ Removing a real material should recreate or rebind the scene-color material.
 - one object that gains and loses a real material;
 - save, close, reopen, and resume.
 
-## Phase 2: 3ds Max Standard Material
-
-### Adapter
-
-Use explicit `StdMat` access when available. Do not make localized slot names
-the primary source of slot semantics.
-
-### Core parameters
-
-Translate:
-
-| Standard parameter | Project Render target | Policy |
-| --- | --- | --- |
-| Diffuse color | Base color | Native |
-| Opacity | Base alpha/transmission policy | Translated |
-| Filter color | Transmission color | Translated |
-| Specular color | Specular color | Native |
-| Specular level/strength | Specular weight | Translated |
-| Glossiness | Roughness | Invert and clamp |
-| IOR | IOR | Native |
-| Self-illumination color | Emission color | Native |
-| Self-illumination amount | Emission intensity | Translated |
-| Two-sided | Double-sided | Native |
-| Wire/face-map/faceted modes | Diagnostic | Unsupported initially |
-
-### Shader models
-
-Support the commonly exposed Standard shader models:
-
-- Blinn;
-- Phong;
-- Metal;
-- Anisotropic;
-- Oren-Nayar-Blinn;
-- Strauss;
-- Translucent;
-- Multi-Layer.
-
-Initial translation policy:
-
-- Blinn and Phong map to generic dielectric specular shading.
-- Metal and Strauss can set or bias the metallic workflow when their
-  parameters indicate metallic behavior.
-- Anisotropic maps to anisotropy and rotation when accessible.
-- Oren-Nayar diffuse roughness maps to the closest available diffuse/material
-  roughness behavior.
-- Translucent maps to thin-walled/translucency fields where appropriate.
-- Multi-Layer uses the closest coat approximation and emits an approximation
-  diagnostic.
-
-The adapter must document parameter ranges and conversion formulas in code.
-
-### Standard map slots
-
-Extract by slot ID:
-
-- diffuse;
-- opacity;
-- bump;
-- specular color;
-- specular level;
-- glossiness;
-- self-illumination;
-- reflection;
-- refraction;
-- displacement, as diagnostic until displacement transport exists;
-- filter color where exposed.
-
-For each slot preserve:
-
-- enabled state;
-- amount;
-- map reference;
-- output settings;
-- UV transform;
-- map channel.
-
-### Normal and bump handling
-
-- A grayscale bump map must set `useBumpMap`.
-- A Normal Bump wrapper should resolve its normal and bump children
-  independently.
-- Tangent-space normal maps must preserve green-channel orientation.
-- Bump strength and normal strength must be transported separately or folded
-  into the existing normal amount only when semantics match.
-
-### Reflection and refraction maps
-
-Project Render does not currently model arbitrary reflection environment maps
-per material. Therefore:
-
-- a reflection color/intensity map may feed specular color/weight only when it
-  represents a surface parameter;
-- environment/reflection-ray maps require an approximation diagnostic;
-- refraction color maps may feed transmission color;
-- distortion/refraction-ray behavior is not a 2D texture substitution.
-
-### Acceptance scene
-
-Create one object for every supported shader model and map slot. Include:
-
-- animated opacity;
-- two-sided foliage-like material;
-- bump and normal maps;
-- separate glossiness map;
-- self-illumination map;
-- Multi/Sub-Object material with sparse material IDs;
-- shared Standard material across multiple nodes.
-
-## Phase 3: 3ds Max Physical Material
+## Phase 2: 3ds Max Physical Material
 
 ### Rationale
 
@@ -626,7 +514,7 @@ has a derived packed-runtime path.
 - Separate metalness and roughness maps arrive in separate payload fields.
 - Coat and transparency update incrementally.
 
-## Phase 4: Bitmap and Procedural Map Pipeline
+## Phase 3: Bitmap and Procedural Map Pipeline
 
 ### Direct bitmap support
 
@@ -771,7 +659,7 @@ payload so each texture binding can carry its own:
 Maintain legacy material-wide fields while reading older payloads. New
 providers should populate the per-binding representation.
 
-## Phase 5: Core VRayMtl Completion
+## Phase 4: Core VRayMtl Completion
 
 ### SDK strategy
 
@@ -905,7 +793,7 @@ Populate:
 Do not place a single-channel metalness map into a packed metal-rough texture
 slot.
 
-## Phase 6: Common V-Ray Maps
+## Phase 5: Common V-Ray Maps
 
 ### Tier 1: direct or near-direct
 
@@ -1023,7 +911,7 @@ These require geometry-aware evaluation. Add support only through:
 
 Any baked result must be invalidated when relevant geometry changes.
 
-## Phase 7: V-Ray Compound Materials
+## Phase 6: V-Ray Compound Materials
 
 ### VRay2SidedMtl
 
@@ -1258,17 +1146,15 @@ Do not depend only on one large production scene.
 ### Required fixtures
 
 1. `max-no-material-scene-color`
-2. `max-standard-core`
-3. `max-standard-maps`
-4. `max-physical-core`
-5. `max-procedural-2d`
-6. `max-procedural-context-dependent`
-7. `max-multisub-shared-materials`
-8. `vraymtl-core`
-9. `vraymtl-maps`
-10. `vray-maps-common`
-11. `vray-compound-materials`
-12. `max-material-resume`
+2. `max-physical-core`
+3. `max-procedural-2d`
+4. `max-procedural-context-dependent`
+5. `max-multisub-shared-materials`
+6. `vraymtl-core`
+7. `vraymtl-maps`
+8. `vray-maps-common`
+9. `vray-compound-materials`
+10. `max-material-resume`
 
 ### Fixture controls
 
@@ -1379,11 +1265,9 @@ All three Release builds are required before a phase is considered complete.
 
 ### Milestone B: Autodesk materials
 
-1. Implement explicit Standard material adapter.
-2. Implement typed Standard map-slot extraction.
-3. Implement Physical Material adapter.
-4. Send split metalness and roughness/glossiness textures.
-5. Add per-texture transform transport.
+1. Implement Physical Material adapter.
+2. Send split metalness and roughness/glossiness textures.
+3. Add per-texture transform transport.
 
 ### Milestone C: procedural maps
 
@@ -1437,15 +1321,13 @@ The first code change should be narrowly scoped and fully shippable:
 - renderer, Max 2024 plugin, and Max 2025 plugin build in Release;
 - `git diff --check` passes.
 
-After this slice, implement the shared extraction refactor and Standard
-material adapter before expanding V-Ray coverage.
+After this slice, implement the shared extraction refactor and Physical
+Material adapter before expanding V-Ray coverage.
 
 ## External Technical References
 
 - Autodesk 3ds Max SDK material and texture classes:
   <https://help.autodesk.com/cloudhelp/2022/ENU/Max-Developer-Help/3ds_max_sdk_features/rendering/materials_textures_and_maps/principal_classes_for_materials_.html>
-- Autodesk Standard Material properties:
-  <https://help.autodesk.com/cloudhelp/2016/ENU/MAXScript-Help/files/GUID-57F5EBBA-5F54-4CD4-8993-0B07A3571293.htm>
 - Autodesk Physical Material properties:
   <https://help.autodesk.com/cloudhelp/2017/ENU/MAXScript-Help/files/GUID-57562F6A-A8A1-4A28-BAE1-0D4729411214.htm>
 - Autodesk `Interface::RenderTexmap` API:
