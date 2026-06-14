@@ -446,6 +446,24 @@ struct NativeMaterialLibraryRecord {
 static Asset::Material BuildPlaceholderMaterialRecord(const std::string &name,
                                                       int materialSlot) {
   Asset::Material material{};
+  // The version-5 prmesh payload only carries material *bindings* (slot +
+  // stable id + name); the real shading arrives later over a separate channel
+  // keyed by stable id. Until/unless that resolves, this placeholder is what
+  // the mesh renders with. Asset::Material's default is glossy (roughness 0.2),
+  // and a glossy flat placeholder mirrors the environment's hard sky/ground
+  // horizon onto the surface as a band that tracks the screen horizon -- the
+  // artifact only the prmesh path shows, because FBX/OBJ embed full material
+  // definitions inline and never hit this placeholder. Match the renderer's own
+  // material-less default (matte grey) so unresolved prmesh meshes read as
+  // matte instead of reflecting the sky.
+  material.diffuseColor[0] = 0.8f;
+  material.diffuseColor[1] = 0.8f;
+  material.diffuseColor[2] = 0.8f;
+  material.diffuseColor[3] = 1.0f;
+  material.metalness = 0.0f;
+  material.roughness = 1.0f;
+  material.specularWeight = 1.0f;
+  material.alphaMode = "OPAQUE";
   std::string resolvedName = name;
   if (resolvedName.empty()) {
     resolvedName = "Material Slot " + std::to_string((std::max)(0, materialSlot));

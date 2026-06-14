@@ -1661,7 +1661,18 @@ Point3 GetFaceCornerNormal(Mesh &mesh, int faceIndex, int corner) {
   MeshNormalSpec *specifiedNormals = mesh.GetSpecifiedNormals();
   if (specifiedNormals && specifiedNormals->GetNumFaces() == mesh.getNumFaces() &&
       specifiedNormals->GetNumNormals() > 0) {
-    return specifiedNormals->GetNormal(faceIndex, corner);
+    // A MeshNormalSpec can report normals while storing zero-length vectors
+    // (seen on render-mesh / live-link captures). Trusting GetNormal() blindly
+    // then yields a zero normal that collapses to the (0,1,0) write fallback,
+    // making every shading normal point straight up. Only accept a non-zero
+    // specified normal; otherwise fall through to the smoothing-group / face
+    // normal logic below.
+    const Point3 specNormal = specifiedNormals->GetNormal(faceIndex, corner);
+    if (specNormal.x * specNormal.x + specNormal.y * specNormal.y +
+            specNormal.z * specNormal.z >
+        1.0e-12f) {
+      return specNormal;
+    }
   }
 
   const Face &face = mesh.faces[faceIndex];
@@ -5603,6 +5614,21 @@ bool CaptureNodeMeshPayloadJob(Interface *ip, INode *node,
     
     capturedFace.materialSlot = materialSlot;
     usedMaterialSlots.insert(capturedFace.materialSlot);
+
+    // Object-space geometric face normal (Max winding) as a guaranteed
+    // backstop. If GetFaceCornerNormal hands back a degenerate vector -- which
+    // it does for whole live-link meshes whose MeshNormalSpec stores zeros --
+    // the write path would otherwise fall back to (0,1,0) for every vertex.
+    // That makes all shading normals point straight up, and the renderer's
+    // two-sided guard then flips them at the view horizon, producing the
+    // eye-level shading band. Reconstructing from the face's own verts keeps
+    // the shading normal consistent with the (correct) geometry.
+    const Point3 &gp0 = mesh.verts[face.getVert(0)];
+    const Point3 &gp1 = mesh.verts[face.getVert(1)];
+    const Point3 &gp2 = mesh.verts[face.getVert(2)];
+    Point3 geometricNormal = CrossPoint3(gp1 - gp0, gp2 - gp0);
+    NormalizePoint3(&geometricNormal, Point3(0.0f, 1.0f, 0.0f));
+
     for (int corner = 0; corner < 3; ++corner) {
       capturedFace.vertexIndices[corner] =
           static_cast<uint32_t>(face.getVert(corner));
@@ -5612,7 +5638,12 @@ bool CaptureNodeMeshPayloadJob(Interface *ip, INode *node,
             static_cast<uint32_t>(tvFace.t[corner]);
         capturedFace.hasTexcoords = true;
       }
-      capturedFace.normals[corner] = GetFaceCornerNormal(mesh, faceIndex, corner);
+      const Point3 cornerNormal = GetFaceCornerNormal(mesh, faceIndex, corner);
+      const float cornerLenSq = cornerNormal.x * cornerNormal.x +
+                                cornerNormal.y * cornerNormal.y +
+                                cornerNormal.z * cornerNormal.z;
+      capturedFace.normals[corner] =
+          (cornerLenSq > 1.0e-12f) ? cornerNormal : geometricNormal;
     }
     job.faces.push_back(std::move(capturedFace));
   }
