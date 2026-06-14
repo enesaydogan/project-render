@@ -1708,6 +1708,85 @@ Point3 GetFaceCornerNormal(Mesh &mesh, int faceIndex, int corner) {
   return mesh.getFaceNormal(faceIndex);
 }
 
+// Returns an explicit, non-zero specified normal for a face corner, or false.
+// This is only the artist-authored / valid MeshNormalSpec path -- it does NOT
+// fall back to face normals, so callers can decide their own smooth fallback.
+bool TryGetSpecifiedCornerNormal(Mesh &mesh, int faceIndex, int corner,
+                                 Point3 *outNormal) {
+  MeshNormalSpec *specifiedNormals = mesh.GetSpecifiedNormals();
+  if (!specifiedNormals ||
+      specifiedNormals->GetNumFaces() != mesh.getNumFaces() ||
+      specifiedNormals->GetNumNormals() <= 0) {
+    return false;
+  }
+  const Point3 n = specifiedNormals->GetNormal(faceIndex, corner);
+  if (n.x * n.x + n.y * n.y + n.z * n.z <= 1.0e-12f) {
+    return false;
+  }
+  *outNormal = n;
+  return true;
+}
+
+// Smoothing-group-aware per-corner vertex normals in object space. Max renders
+// a sphere smooth by averaging the face normals around each vertex that share a
+// smoothing group; the RVertex cache that normally exposes this is not reliably
+// built on live-link/render-mesh captures (it falls through to faceted face
+// normals), so we reconstruct it directly. Faces with smGroup==0 stay faceted;
+// vertices on a smoothing-group boundary (hard edges of a box) average only
+// within the matching group, so hard edges remain hard. Area weighting comes
+// from using the un-normalized cross product (its length is 2*triangle area).
+std::vector<std::array<Point3, 3>> ComputeSmoothCornerNormalsObjectSpace(
+    Mesh &mesh) {
+  const int numFaces = mesh.getNumFaces();
+  const int numVerts = mesh.getNumVerts();
+  std::vector<std::array<Point3, 3>> result(
+      static_cast<size_t>(std::max(numFaces, 0)));
+
+  std::vector<Point3> faceNormals(static_cast<size_t>(std::max(numFaces, 0)));
+  for (int f = 0; f < numFaces; ++f) {
+    const Face &face = mesh.faces[f];
+    const Point3 &a = mesh.verts[face.getVert(0)];
+    const Point3 &b = mesh.verts[face.getVert(1)];
+    const Point3 &c = mesh.verts[face.getVert(2)];
+    faceNormals[f] = CrossPoint3(b - a, c - a); // length == 2*area (weighting)
+  }
+
+  std::vector<std::vector<int>> vertexFaces(
+      static_cast<size_t>(std::max(numVerts, 0)));
+  for (int f = 0; f < numFaces; ++f) {
+    const Face &face = mesh.faces[f];
+    for (int corner = 0; corner < 3; ++corner) {
+      vertexFaces[face.getVert(corner)].push_back(f);
+    }
+  }
+
+  for (int f = 0; f < numFaces; ++f) {
+    const Face &face = mesh.faces[f];
+    const DWORD smGroup = face.smGroup;
+    for (int corner = 0; corner < 3; ++corner) {
+      Point3 accumulated(0.0f, 0.0f, 0.0f);
+      if (smGroup == 0) {
+        accumulated = faceNormals[f];
+      } else {
+        const int vertexIndex = face.getVert(corner);
+        for (int neighborFace : vertexFaces[vertexIndex]) {
+          if ((mesh.faces[neighborFace].smGroup & smGroup) != 0) {
+            accumulated += faceNormals[neighborFace];
+          }
+        }
+        if (accumulated.x * accumulated.x + accumulated.y * accumulated.y +
+                accumulated.z * accumulated.z <=
+            1.0e-12f) {
+          accumulated = faceNormals[f];
+        }
+      }
+      NormalizePoint3(&accumulated, Point3(0.0f, 1.0f, 0.0f));
+      result[f][corner] = accumulated;
+    }
+  }
+  return result;
+}
+
 Point3 BuildStableCameraUp(const Point3 &forward) {
   const Point3 worldUp(0.0f, 1.0f, 0.0f);
   Point3 right = CrossPoint3(worldUp, forward);
@@ -5597,6 +5676,16 @@ bool CaptureNodeMeshPayloadJob(Interface *ip, INode *node,
   std::unordered_set<int> usedMaterialSlots;
   const bool isMultiMtl = rootMaterial && rootMaterial->IsMultiMtl();
   const int subMaterialCount = rootMaterial ? rootMaterial->NumSubMtls() : 0;
+
+  // Smoothing-group-aware vertex normals, reconstructed directly from the
+  // geometry. Max shows a sphere smooth via these; the RVertex cache that
+  // GetFaceCornerNormal reads is not reliably built on live-link captures, so
+  // it falls through to faceted face normals (sphere shows facets in-engine
+  // while smooth in Max). We compute them ourselves so smooth surfaces stay
+  // smooth and smoothing-group boundaries (box hard edges) stay hard.
+  const std::vector<std::array<Point3, 3>> smoothCornerNormals =
+      ComputeSmoothCornerNormalsObjectSpace(mesh);
+
   for (int faceIndex = 0; faceIndex < mesh.getNumFaces(); ++faceIndex) {
     Face &face = mesh.faces[faceIndex];
     CapturedMeshFace capturedFace;
@@ -5638,7 +5727,14 @@ bool CaptureNodeMeshPayloadJob(Interface *ip, INode *node,
             static_cast<uint32_t>(tvFace.t[corner]);
         capturedFace.hasTexcoords = true;
       }
-      const Point3 cornerNormal = GetFaceCornerNormal(mesh, faceIndex, corner);
+      // Priority: artist-authored explicit normals -> reconstructed smooth
+      // (smoothing-group) normal -> geometric face normal. We no longer trust
+      // GetFaceCornerNormal's RVertex/face-normal fallback, which yields
+      // faceted output on these meshes.
+      Point3 cornerNormal;
+      if (!TryGetSpecifiedCornerNormal(mesh, faceIndex, corner, &cornerNormal)) {
+        cornerNormal = smoothCornerNormals[faceIndex][corner];
+      }
       const float cornerLenSq = cornerNormal.x * cornerNormal.x +
                                 cornerNormal.y * cornerNormal.y +
                                 cornerNormal.z * cornerNormal.z;
