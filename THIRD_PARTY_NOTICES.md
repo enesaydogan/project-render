@@ -46,6 +46,36 @@ project or vendor.
 - Licensed under permissive open-source terms; retain the upstream notice when
   redistributing.
 
+### OpenVDB And VDB Runtime Dependencies
+
+- OpenVDB 12.0.1 is used to inspect and import `.vdb` sparse volume grids.
+- OpenVDB is licensed under the Apache License 2.0.
+- The Windows build resolves OpenVDB through the repository's vcpkg tree and
+  ships the runtime libraries required by the selected vcpkg build.
+- The installed OpenVDB dependency stack currently includes:
+  - Blosc 1.21.6, BSD license.
+  - Imath 3.2.2 and OpenEXR 3.4.11, BSD 3-Clause licenses.
+  - oneTBB 2022.3.0, Apache License 2.0.
+  - LZ4 1.10.0, BSD 2-Clause license.
+  - Zstandard 1.5.7, distributed under its BSD or GPLv2 options; Project Render
+    uses the redistributable library under the BSD terms.
+  - Snappy 1.2.2, BSD 3-Clause license.
+  - zlib 1.3.2, zlib license.
+  - Boost.Iostreams 1.91.0 and its Boost dependencies, Boost Software License
+    1.0.
+- Exact license texts for the installed packages are stored under:
+  - `repos/vcpkg/installed/x64-windows/share/openvdb/copyright`
+  - `repos/vcpkg/installed/x64-windows/share/blosc/copyright`
+  - `repos/vcpkg/installed/x64-windows/share/imath/copyright`
+  - `repos/vcpkg/installed/x64-windows/share/openexr/copyright`
+  - `repos/vcpkg/installed/x64-windows/share/tbb/copyright`
+  - `repos/vcpkg/installed/x64-windows/share/lz4/copyright`
+  - `repos/vcpkg/installed/x64-windows/share/zstd/copyright`
+  - `repos/vcpkg/installed/x64-windows/share/snappy/copyright`
+  - `repos/vcpkg/installed/x64-windows/share/zlib/copyright`
+  - `repos/vcpkg/installed/x64-windows/share/boost-iostreams/copyright`
+- Release installers include these texts under `licenses/`.
+
 ### nlohmann/json
 
 - Used through NVIDIA Streamline's external dependency tree.
@@ -124,6 +154,8 @@ Project Render's MIT license.
   plugins beyond the rights granted by their respective owners.
 - When shipping binaries, include all required third-party license texts and
   notices.
+- Keep the OpenVDB and compression/runtime license files included when
+  redistributing builds with `USE_OPENVDB=ON`.
 - When shipping Qt LGPL builds, keep the deployment model compatible with LGPL
   obligations, including dynamic linking and user-replaceable Qt libraries.
 - When shipping optional proprietary integrations, verify redistribution rights

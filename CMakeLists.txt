@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(project-render VERSION 0.5.0 LANGUAGES CXX)
+project(project-render VERSION 0.5.5 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -833,6 +833,36 @@ install(DIRECTORY "$<TARGET_FILE_DIR:project-render>/"
   PATTERN "*.lib" EXCLUDE # Exclude static/import libraries
   PATTERN "*.exp" EXCLUDE # Exclude exports
 )
+
+# Ship the practical notice and exact vcpkg license texts used by the OpenVDB
+# runtime included with Release builds.
+install(FILES "${CMAKE_SOURCE_DIR}/THIRD_PARTY_NOTICES.md"
+  DESTINATION .
+  COMPONENT CoreApp
+)
+
+set(PROJECT_RENDER_OPENVDB_LICENSE_PACKAGES
+  openvdb
+  blosc
+  imath
+  openexr
+  tbb
+  lz4
+  zstd
+  snappy
+  zlib
+  boost-iostreams
+)
+foreach(package_name IN LISTS PROJECT_RENDER_OPENVDB_LICENSE_PACKAGES)
+  set(package_license
+    "${VCPKG_INSTALLED_DIR}/share/${package_name}/copyright")
+  if(EXISTS "${package_license}")
+    install(FILES "${package_license}"
+      DESTINATION "licenses/${package_name}"
+      COMPONENT CoreApp
+    )
+  endif()
+endforeach()
 
 # Optional Plugin: 3ds Max 2024 Live Link
 if(EXISTS "${CMAKE_SOURCE_DIR}/build-max2024/Release/ProjectRenderLiveLink.dlu")

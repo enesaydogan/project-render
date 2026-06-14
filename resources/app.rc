@@ -6,8 +6,8 @@ IDI_APP_ICON ICON "app.ico"
 
 // simple version information block
 1 VERSIONINFO
-FILEVERSION 0,5,0,0
-PRODUCTVERSION 0,5,0,0
+FILEVERSION 0,5,5,0
+PRODUCTVERSION 0,5,5,0
 FILEFLAGSMASK 0x3fL
 #ifdef _DEBUG
 FILEFLAGS 0x1L
@@ -24,11 +24,11 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "AI SLOP INC\0"
             VALUE "FileDescription", "Project Render executable\0"
-            VALUE "FileVersion", "0.5.0\0"
+            VALUE "FileVersion", "0.5.5\0"
             VALUE "InternalName", "project-render.exe\0"
             VALUE "OriginalFilename", "project-render.exe\0"
             VALUE "ProductName", "Project Render\0"
-            VALUE "ProductVersion", "0.5.0\0"
+            VALUE "ProductVersion", "0.5.5\0"
         END
     END
     BLOCK "VarFileInfo"
