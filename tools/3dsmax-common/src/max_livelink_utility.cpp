@@ -1065,6 +1065,11 @@ std::string MakeMaterialObjectId(const std::string &nodeObjectId,
          ":slot:" + std::to_string((std::max)(0, materialSlot));
 }
 
+std::string MakeSceneColorMaterialStableId(INode *node) {
+  return node ? std::string("max-scene-color:") + GetOrCreateNodeGuid(node)
+              : std::string();
+}
+
 std::string MakeLightObjectId(INode *node) {
   if (!node) {
     return {};
@@ -4376,6 +4381,70 @@ bool CaptureMaterialSnapshot(Interface *ip, INode *node, int materialSlot,
   return true;
 }
 
+std::array<float, 4> NodeWireColorToBaseColor(INode *node) {
+  if (!node) {
+    return {1.0f, 1.0f, 1.0f, 1.0f};
+  }
+
+  const DWORD packedColor = node->GetWireColor();
+  constexpr float kByteToFloat = 1.0f / 255.0f;
+  return {static_cast<float>(GetRValue(packedColor)) * kByteToFloat,
+          static_cast<float>(GetGValue(packedColor)) * kByteToFloat,
+          static_cast<float>(GetBValue(packedColor)) * kByteToFloat,
+          1.0f};
+}
+
+bool CaptureSceneColorMaterialSnapshot(INode *node,
+                                       MaterialSnapshot *outSnapshot,
+                                       MaterialGatherTimingStats *timingStats = nullptr) {
+  if (!node || !outSnapshot) {
+    return false;
+  }
+
+  MaterialSnapshot snapshot;
+  snapshot.valid = true;
+  snapshot.nodeHandle = node->GetHandle();
+  snapshot.materialSlot = 0;
+  snapshot.nodeObjectId = MakeNodeObjectId(node);
+  snapshot.materialStableId = MakeSceneColorMaterialStableId(node);
+  snapshot.references.push_back(
+      MaterialReferenceSnapshot{snapshot.nodeObjectId, snapshot.materialSlot});
+  snapshot.objectId = MakeMaterialObjectId(snapshot.nodeObjectId,
+                                           snapshot.materialSlot,
+                                           snapshot.materialStableId);
+  snapshot.name = ToUtf8(node->GetName());
+  if (snapshot.name.empty()) {
+    snapshot.name = snapshot.nodeObjectId;
+  }
+  snapshot.name += " [Scene Color]";
+  snapshot.materialModel = "MaxSceneColor";
+  snapshot.sourceMaterialClass = "max-scene-color";
+  snapshot.baseColor = NodeWireColorToBaseColor(node);
+  snapshot.emissiveColor = {0.0f, 0.0f, 0.0f, 1.0f};
+  snapshot.emissiveIntensity = 0.0f;
+  snapshot.roughness = 0.8f;
+  snapshot.metalness = 0.0f;
+  snapshot.specularWeight = 0.5f;
+  snapshot.specularColor = {1.0f, 1.0f, 1.0f};
+  snapshot.ior = 1.5f;
+  snapshot.transmissionWeight = 0.0f;
+  snapshot.transmissionColor = {1.0f, 1.0f, 1.0f};
+  snapshot.alphaMode = "OPAQUE";
+  snapshot.alphaCutoff = 0.35f;
+  snapshot.diagnostics.push_back(MaterialExtractionDiagnostic{
+      MaterialDiagnosticSeverity::Info,
+      MaterialConversionOutcome::Translated,
+      snapshot.sourceMaterialClass,
+      "No 3ds Max material assigned; using node scene color as a fallback material."});
+
+  if (timingStats) {
+    ++timingStats->materialCount;
+  }
+
+  *outSnapshot = std::move(snapshot);
+  return true;
+}
+
 void GatherMaterialSnapshots(
     Interface *ip, const std::unordered_map<ULONG_PTR, NodeSnapshot> &nodeState,
     MaterialStateMap *outState,
@@ -4407,6 +4476,12 @@ void GatherMaterialSnapshots(
     }
     Mtl *rootMaterial = node->GetMtl();
     if (!rootMaterial) {
+      MaterialSnapshot sceneColorSnapshot;
+      if (CaptureSceneColorMaterialSnapshot(node, &sceneColorSnapshot,
+                                            timingStats)) {
+        outState->insert_or_assign(sceneColorSnapshot.objectId,
+                                   std::move(sceneColorSnapshot));
+      }
       continue;
     }
 
@@ -4824,12 +4899,15 @@ void PopulateSnapshotMeshMetadata(Interface *ip, INode *node, Mesh &mesh,
 
   Mtl *rootMaterial = node->GetMtl();
   if (rootMaterial) {
+    fingerprint = HashCombine(fingerprint, 0x6d61746c75696431ull);
     const std::string materialGuid = GetOrCreateMaterialGuid(rootMaterial);
     for (char c : materialGuid) {
       fingerprint = HashCombine(fingerprint, static_cast<uint64_t>(c));
     }
   } else {
-    fingerprint = HashCombine(fingerprint, 0x01010101ull);
+    fingerprint = HashCombine(fingerprint, 0x73636e636f6c7231ull);
+    fingerprint =
+        HashCombine(fingerprint, static_cast<uint64_t>(node->GetWireColor()));
   }
   snapshot->geometryFingerprint = fingerprint;
 }
@@ -5561,6 +5639,11 @@ bool CaptureNodeMeshPayloadJob(Interface *ip, INode *node,
                                 "]";
       }
 
+      job.serializedMaterials.push_back(std::move(materialSnapshot));
+    }
+  } else if (!rootMaterial) {
+    MaterialSnapshot materialSnapshot;
+    if (CaptureSceneColorMaterialSnapshot(node, &materialSnapshot)) {
       job.serializedMaterials.push_back(std::move(materialSnapshot));
     }
   }
@@ -6870,7 +6953,7 @@ private:
     void ControllerStructured(NodeKeyTab &nodes) override { Mark(nodes, DirtyNodeState | DirtyMesh | DirtyMaterial | DirtyLight); }
     void ControllerOtherEvent(NodeKeyTab &nodes) override { Mark(nodes, DirtyNodeState | DirtyMesh | DirtyMaterial | DirtyLight); }
     void NameChanged(NodeKeyTab &nodes) override { Mark(nodes, DirtyNodeState); }
-    void WireColorChanged(NodeKeyTab &nodes) override { Mark(nodes, DirtyNodeState); }
+    void WireColorChanged(NodeKeyTab &nodes) override { Mark(nodes, DirtyNodeState | DirtyMaterial); }
     void RenderPropertiesChanged(NodeKeyTab &nodes) override { Mark(nodes, DirtyNodeState | DirtyLight); }
     void DisplayPropertiesChanged(NodeKeyTab &nodes) override { Mark(nodes, DirtyNodeState); }
     void UserPropertiesChanged(NodeKeyTab &nodes) override { Mark(nodes, DirtyNodeState); }
