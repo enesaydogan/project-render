@@ -59,6 +59,10 @@ VolumeStats GetVolumeStats(const assetlib::AssetId &id);
 // Requests a zero-based sequence frame and applies a completed asynchronous
 // load. Returns true only when the resident volume frame changed.
 bool UpdateSequenceFrame(const assetlib::AssetId &id, uint32_t frameIndex);
+// Makes the requested sequence frame resident before returning. This is for
+// deterministic offline export; interactive playback should remain async.
+bool PrepareSequenceFrame(const assetlib::AssetId &id, uint32_t frameIndex,
+                          bool *changed = nullptr);
 
 // --- Used by the raster renderer ---------------------------------------
 // Performs any pending GPU upload onto cmdList. Returns false if nothing is

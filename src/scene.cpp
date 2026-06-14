@@ -4048,10 +4048,60 @@ bool SetVolumeNodePlayback(size_t nodeIndex,
 
 namespace {
 float s_volumeTimelineSeconds = 0.0f;
+
+uint32_t ResolveVolumeSequenceFrame(
+    const Node &node, const VolumetricRenderer::SequenceInfo &sequence,
+    float seconds) {
+  int64_t frame =
+      static_cast<int64_t>(std::floor(seconds * node.volumePlayback.fps)) +
+      node.volumePlayback.frameOffset;
+  const int64_t count = static_cast<int64_t>(sequence.frameCount);
+  if (node.volumePlayback.loop) {
+    frame = ((frame % count) + count) % count;
+  } else {
+    frame = (std::clamp)(frame, int64_t{0}, count - 1);
+  }
+  return static_cast<uint32_t>(frame);
+}
 }
 
 void SetVolumeTimelineTime(float seconds) {
   s_volumeTimelineSeconds = (std::max)(seconds, 0.0f);
+}
+
+bool PrepareVolumeTimelineFrame() {
+  bool frameChanged = false;
+  for (Node &node : s_nodes) {
+    if (!node.visible || node.volumeAssetId.empty() ||
+        node.volumePlayback.mode != VolumePlaybackMode::Timeline) {
+      continue;
+    }
+    assetlib::AssetId id;
+    if (!assetlib::AssetId::FromString(node.volumeAssetId, id))
+      return false;
+    const VolumetricRenderer::SequenceInfo sequence =
+        VolumetricRenderer::GetSequenceInfo(id);
+    if (!sequence.animated || sequence.frameCount < 2)
+      continue;
+    if (std::abs(node.volumePlayback.fps - 30.0f) < 1.0e-4f &&
+        std::abs(sequence.sourceFps - 24.0f) < 1.0e-4f) {
+      node.volumePlayback.fps = sequence.sourceFps;
+    }
+
+    bool changed = false;
+    if (!VolumetricRenderer::PrepareSequenceFrame(
+            id, ResolveVolumeSequenceFrame(node, sequence,
+                                           s_volumeTimelineSeconds),
+            &changed)) {
+      return false;
+    }
+    frameChanged |= changed;
+  }
+  if (frameChanged) {
+    UpdateLights();
+    DxrRenderer::ResetAccumulation();
+  }
+  return true;
 }
 
 void TickVolumeAnimations(float deltaSeconds) {
@@ -4096,17 +4146,8 @@ void TickVolumeAnimations(float deltaSeconds) {
       break;
     }
 
-    int64_t frame = static_cast<int64_t>(
-                        std::floor(seconds * node.volumePlayback.fps)) +
-                    node.volumePlayback.frameOffset;
-    const int64_t count = static_cast<int64_t>(sequence.frameCount);
-    if (node.volumePlayback.loop) {
-      frame = ((frame % count) + count) % count;
-    } else {
-      frame = (std::clamp)(frame, int64_t{0}, count - 1);
-    }
     frameChanged |= VolumetricRenderer::UpdateSequenceFrame(
-        id, static_cast<uint32_t>(frame));
+        id, ResolveVolumeSequenceFrame(node, sequence, seconds));
   }
   if (frameChanged || materialMigrated) {
     UpdateLights();

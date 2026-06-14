@@ -736,6 +736,57 @@ bool UpdateSequenceFrame(const assetlib::AssetId &id, uint32_t frameIndex) {
   return changed;
 }
 
+bool PrepareSequenceFrame(const assetlib::AssetId &id, uint32_t frameIndex,
+                          bool *changed) {
+  if (changed)
+    *changed = false;
+  RuntimeVolume *volume = ResolveVolume(id);
+  if (!volume || !volume->sequence || volume->sequenceFrameCount < 2)
+    return false;
+
+  const uint32_t requested =
+      (std::min)(frameIndex, volume->sequenceFrameCount - 1);
+  volume->requestedFrame = requested;
+
+  if (volume->pendingLoad.valid()) {
+    auto [loaded, frame] = volume->pendingLoad.get();
+    if (loaded) {
+      ApplyCpuFrame(*volume, std::move(frame), volume->pendingFrame);
+      if (changed)
+        *changed = true;
+    } else {
+      fprintf(stderr, "VDB sequence frame %u failed to load for %s\n",
+              volume->pendingFrame, id.ToString().c_str());
+    }
+  }
+  if (volume->currentFrame == requested)
+    return true;
+
+  assetlib::AssetRegistry *registry = assetlib::GlobalRegistry();
+  if (!registry)
+    return false;
+  const std::filesystem::path cachePath =
+      requested == 0
+          ? registry->paths().cookedVolumePath(id)
+          : registry->paths().cookedVolumeFramePath(id, requested);
+  assetlib::CookedVolume cooked;
+  std::vector<uint8_t> blob;
+  RuntimeVolume temporary;
+  if (!assetlib::ReadCookedFile(cachePath, blob) ||
+      !assetlib::DeserializeCookedVolume(blob.data(), blob.size(), cooked) ||
+      !BuildDenseField(cooked, temporary)) {
+    fprintf(stderr, "VDB export frame %u failed to load for %s\n", requested,
+            id.ToString().c_str());
+    return false;
+  }
+
+  ApplyCpuFrame(*volume, TakeCpuFrame(temporary), requested);
+  volume->pendingFrame = requested;
+  if (changed)
+    *changed = true;
+  return true;
+}
+
 void AppendEmissionLights(std::vector<Light> &lights) {
   constexpr uint32_t kClustersPerAxis = 4;
   constexpr uint32_t kClusterCount =

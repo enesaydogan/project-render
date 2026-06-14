@@ -159,6 +159,7 @@ bool SetVolumeNodeMaterial(size_t nodeIndex, const VolumeMaterial &material);
 bool SetVolumeNodePlayback(size_t nodeIndex,
                            const VolumePlaybackSettings &settings);
 void SetVolumeTimelineTime(float seconds);
+bool PrepareVolumeTimelineFrame();
 void TickVolumeAnimations(float deltaSeconds);
 
 // Extract a self-contained Model asset directly from a set of global scene

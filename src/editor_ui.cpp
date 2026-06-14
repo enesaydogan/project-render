@@ -1045,6 +1045,13 @@ static bool StartNextAnimationRenderJob() {
   // camera animates.
   Scene::SetVolumeTimelineTime(static_cast<float>(frameIndex) /
                                static_cast<float>(fps));
+  // Export accumulation must not start against the previously resident
+  // asynchronous VDB frame. Make the exact timeline frame resident first.
+  if (!Scene::PrepareVolumeTimelineFrame()) {
+    g_renderAnimationExport.failed = true;
+    g_renderExportStatus = "Animation export failed: VDB frame unavailable.";
+    return false;
+  }
   SavedViews::ApplyView(frameCamera);
 
   const auto &animationSettings = AnimationSequence::GetExportSettings();
