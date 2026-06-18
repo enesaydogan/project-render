@@ -236,6 +236,31 @@ should remain clear:
 - diagnostics report unsupported or approximate behavior;
 - wire serialization remains separate from extraction.
 
+#### Build model and migration status
+
+The two plugins share provider code by **textual inclusion**: each
+`tools/3dsmax{2024,2025}/src/max_livelink_utility.cpp` is a thin wrapper that
+`#define`s version-specific identity and then `#include`s the shared
+`tools/3dsmax-common/src/max_livelink_utility.cpp`. To honor the module split
+without restructuring the unity build, each `material/` file is its own source
+file `#include`d by the shared translation unit *after* the types and helpers
+it depends on. No CMake change is required, and each plugin still compiles the
+material code exactly once. The files keep single-responsibility ownership as
+above even though they are not separate compilation units.
+
+Migrated so far:
+
+- `material/max_physical_material_adapter.cpp` — Physical Material adapter
+  (Phase 2), included from the shared utility before `CaptureMaterialSnapshot`.
+
+Still resident in `tools/3dsmax-common/src/max_livelink_utility.cpp`, to be
+migrated into the module the same way: the V-Ray adapter
+(`ApplyVrayMaterialParameters`), the texture resolver
+(`TryResolveTexmapTextureBinding` + `ApplyTextureBinding` + the generic
+slot-token capture), the procedural baker, the diagnostics helpers, and the
+provider-neutral types/context (`MaterialSnapshot`, `TextureBindingSnapshot`,
+diagnostic enums) into `max_material_types.h` / `max_material_context.h`.
+
 ### Extraction result
 
 Each material adapter should produce one canonical provider-side snapshot.
@@ -462,6 +487,38 @@ Removing a real material should recreate or rebind the scene-color material.
 - save, close, reopen, and resume.
 
 ## Phase 2: 3ds Max Physical Material
+
+### Status
+
+Adapter implemented in `tools/3dsmax-common/src/max_livelink_utility.cpp`
+(`ApplyPhysicalMaterialParameters`), dispatched from `CaptureMaterialSnapshot`
+for `MaterialSourceKind::Physical` after the generic baseline.
+
+Done:
+
+- Parameters read directly from the Physical Material parameter block by stable
+  internal name (version-robust; no copied ParamID enum), overriding the
+  inaccurate legacy `Mtl`-getter baseline.
+- Translated scalars/colors: base weight x base color; metalness; roughness
+  (authored as roughness, no inversion); reflectivity -> specular weight;
+  reflection color -> specular tint; IOR; transparency weight/color, at-depth
+  -> attenuation distance, thin-walled; emission weight x color with luminance
+  (cd/m^2) folded into intensity; coat weight/roughness/IOR; anisotropy and
+  rotation; subsurface scattering -> translucency approximation.
+- Texture slots wired to existing payload fields: base color, bump, coat bump,
+  emission color, cutout -> opacity (alpha mode MASK).
+- Diagnostics emitted (no silent loss) for: diffuse/Oren-Nayar roughness,
+  transparency roughness, coat tint color, SSS-as-translucency, displacement,
+  and separate roughness/metalness maps.
+
+Remaining:
+
+- Separate roughness/metalness **maps** are not transported (would pack into one
+  slot, which this plan forbids). This needs the PMAT v4 split-texture payload
+  (see Payload and Serialization Changes) plus per-texture transforms. The
+  adapter emits a Warning diagnostic and sends the scalar values meanwhile.
+- Diffuse roughness, transparency roughness, and coat tint color have no engine
+  field yet; carried as diagnostics until added.
 
 ### Rationale
 

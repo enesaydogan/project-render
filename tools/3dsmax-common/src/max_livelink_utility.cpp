@@ -4348,6 +4348,14 @@ Mtl *ResolveMaterialForSlot(Mtl *rootMaterial, int materialSlot) {
   return ResolveLeafMaterial(rootMaterial);
 }
 
+// Provider-side material adapters live in tools/3dsmax-common/material/ with
+// clear ownership (parameter interpretation only). They are compiled via
+// inclusion here -- after the provider-neutral material types and the shared
+// extraction helpers they depend on -- consistent with this codebase's
+// unity-include build model. Wire serialization stays in this file, separate
+// from extraction (see material-plan.md "Target Translation Architecture").
+#include "../material/max_physical_material_adapter.cpp"
+
 bool CaptureMaterialSnapshot(Interface *ip, INode *node, int materialSlot,
                              Mtl *material, MaterialSnapshot *outSnapshot,
                              MaterialGatherTimingStats *timingStats = nullptr) {
@@ -4426,6 +4434,9 @@ bool CaptureMaterialSnapshot(Interface *ip, INode *node, int materialSlot,
 #else
   (void)sourceKind;
 #endif
+  if (sourceKind == MaterialSourceKind::Physical) {
+    ApplyPhysicalMaterialParameters(ip, material, &snapshot);
+  }
   if (snapshot.triPlanarEnabled <= 0.5f &&
       (!snapshot.baseColorTextureUri.empty() ||
        !snapshot.normalTextureUri.empty() ||
