@@ -2065,7 +2065,9 @@ PSOutput PSMainMesh(PSInputMesh input, uint primitiveId : SV_PrimitiveID)
     }
 
     PSOutput o;
-    o.color = float4(color, alpha);
+    // Tonemap ignores HDR alpha; keep material F0 here so raster SSR can
+    // respect Reflection IOR instead of reflecting every smooth surface.
+    o.color = float4(color, saturate(max(F0.r, max(F0.g, F0.b))));
     o.normal = float4(N * 0.5 + 0.5, roughness);
     return o;
 }

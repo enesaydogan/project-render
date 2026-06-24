@@ -114,6 +114,7 @@ void CSMain(uint3 id : SV_DispatchThreadID)
 
     float2 uv = (float2(id.xy) + 0.5) / float2(width, height);
     float4 sceneColor = LoadColor(id.xy);
+    float materialF0 = saturate(sceneColor.a);
     float4 normalData = LoadNormalData(id.xy);
     float3 N = normalize(normalData.xyz * 2.0 - 1.0);
     float roughness = saturate(normalData.w);
@@ -179,11 +180,10 @@ void CSMain(uint3 id : SV_DispatchThreadID)
         }
     }
 
-    // The raster path only stores roughness in the GBuffer, so use a stronger
-    // practical reflection response here instead of a tiny dielectric-only term.
-    float fresnel = pow(1.0 - saturate(dot(N, -V)), 5.0);
+    float grazing = pow(1.0 - saturate(dot(N, -V)), 5.0);
+    float fresnel = materialF0 + (1.0 - materialF0) * grazing;
     float smoothWeight = saturate((smoothness - minSmoothness) / max(1e-3, 1.0 - minSmoothness));
-    float reflectionAmount = ssrIntensity * hitWeight * smoothWeight * lerp(0.35, 1.0, fresnel);
+    float reflectionAmount = ssrIntensity * hitWeight * smoothWeight * fresnel;
     reflectionAmount = saturate(reflectionAmount);
     
     OutputTex[id.xy] = float4(lerp(sceneColor.rgb, hitColor, reflectionAmount), 1.0);

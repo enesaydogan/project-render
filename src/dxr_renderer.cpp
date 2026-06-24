@@ -4701,8 +4701,8 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   hitSub.pDesc = &hitGroupDesc;
 
   // Must match RayPayload in shaders/raytracing/common.hlsli:
-  // float t + 7 packed uints + float4 surface + uint parallax = 13 dwords.
-  constexpr UINT kRayPayloadSizeInBytes = 13u * sizeof(uint32_t);
+  // float t + 8 packed uints + float4 surface + uint parallax = 14 dwords.
+  constexpr UINT kRayPayloadSizeInBytes = 14u * sizeof(uint32_t);
   fprintf(stderr, "DxrRenderer: MaxPayloadSizeInBytes=%u\n",
           kRayPayloadSizeInBytes);
   shaderConfig.MaxPayloadSizeInBytes = kRayPayloadSizeInBytes;
