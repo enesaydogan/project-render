@@ -972,7 +972,10 @@ void MaterialEditorPanel::createUi()
     surfaceForm->addRow(tr("Refraction color"), m_transmissionColorButton);
     m_ior = CreateSliderControl(MaterialSystem::kMinMaterialIor,
                                 MaterialSystem::kMaxMaterialIor, 0.001, 3);
-    addSliderRow(surfaceForm, tr("Refraction IOR"), m_ior, -1, surfaceTab);
+    m_ior->setToolTip(
+        tr("Shared dielectric IOR used by reflection Fresnel and refraction."));
+    addSliderRow(surfaceForm, tr("Reflection / refraction IOR"), m_ior, -1,
+                 surfaceTab);
 
     addDivider(surfaceForm, surfaceTab);
 
@@ -998,9 +1001,6 @@ void MaterialEditorPanel::createUi()
     advancedForm->addRow(createPlaceholderCheck(
         tr("Physically based Fresnel"), true, advancedTab,
         tr("Always enabled by the renderer's physically based GGX model.")));
-    advancedForm->addRow(createPlaceholderCheck(
-        tr("Shared surface IOR"), true, advancedTab,
-        tr("The renderer currently uses the shared material IOR.")));
     addDivider(advancedForm, advancedTab);
     advancedForm->addRow(
         tr("Reflection model"),
@@ -2821,7 +2821,7 @@ void MaterialEditorPanel::applyMaterialChange(const std::function<void(Asset::Ma
     const bool changed = !MaterialSystem::MaterialsEqual(before, updated);
 
     if (changed) {
-        Scene::UpdateMaterial(static_cast<size_t>(idx), updated);
+        Scene::UpdateMaterial(static_cast<size_t>(idx), updated, false);
     } else if (markOpacityDirty || structureChanged || requestAsRebuild) {
         DxrRenderer::MarkMaterialDirty(idx);
     }

@@ -692,6 +692,17 @@ static void RefreshMaterialRuntimeTexture(Asset::Material &material) {
   }
 }
 
+static bool DerivedPackedSurfaceInputsChanged(
+    const Asset::Material &previous, const Asset::Material &next) {
+  return previous.metalnessTexture != next.metalnessTexture ||
+         previous.roughnessGlossTexture != next.roughnessGlossTexture ||
+         previous.metalnessTextureAmount != next.metalnessTextureAmount ||
+         previous.roughnessGlossTextureAmount !=
+             next.roughnessGlossTextureAmount ||
+         previous.workflow != next.workflow ||
+         previous.invertRoughnessTexture != next.invertRoughnessTexture;
+}
+
 int AddTexture(Asset::Texture texture) {
   if (!g_device) {
     fprintf(stderr, "AddTexture: no device\n");
@@ -5740,14 +5751,19 @@ bool UpdateNodeMaterialSourceName(size_t nodeIndex, size_t materialSlot,
   return true;
 }
 
-bool UpdateMaterial(size_t index, const Asset::Material &material) {
+bool UpdateMaterial(size_t index, const Asset::Material &material,
+                    bool refreshTextureCompression) {
   if (index >= g_loadedMaterials.size()) {
     return false;
   }
 
   Asset::Material &dst = g_loadedMaterials[index];
   Asset::Material updatedMaterial = material;
-  RefreshMaterialRuntimeTexture(updatedMaterial);
+  if (DerivedPackedSurfaceInputsChanged(dst, updatedMaterial)) {
+    RefreshMaterialRuntimeTexture(updatedMaterial);
+  } else {
+    updatedMaterial.runtimeMetalRoughTexture = dst.runtimeMetalRoughTexture;
+  }
   if (MaterialSystem::MaterialsEqual(dst, updatedMaterial)) {
     return true;
   }
@@ -5765,7 +5781,9 @@ bool UpdateMaterial(size_t index, const Asset::Material &material) {
   if (!updatedName.empty()) {
     s_materialIndicesByName[updatedName] = static_cast<int>(index);
   }
-  RefreshTextureCompressionForMaterials(false);
+  if (refreshTextureCompression) {
+    RefreshTextureCompressionForMaterials(false);
+  }
   DxrRenderer::MarkMaterialDirty(static_cast<int>(index));
   ApplyRendererInvalidation(RendererInvalidationPlan::AccumulationOnly);
   NotifySceneChanged();

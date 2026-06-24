@@ -257,55 +257,71 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             maxDiffuseBounceCount = min(maxDiffuseBounceCount, 1u);
         }
 
+        const bool deterministicMirrorDielectric =
+            roughness <= 0.01 &&
+            transmission <= 1.0e-4 &&
+            metallic <= 0.05 &&
+            specularWeight > 1.0e-4;
         uint nextRayType = RAY_TYPE_DIFFUSE;
         float3 nextDirection = normal;
         float3 nextThroughput = state.throughput * saturate(albedo);
         
-        // Evaluate probabilities for path continuation to avoid hard cut-offs
-        float transmissionProb = 0.0;
-        float reflectionProb = 0.0;
-        float diffuseProb = 0.0;
-        ComputeWavefrontLobeProbabilities(normal, -rayDir,
-                          albedo, metallic, transmission,
-                          translucency, ior, specularWeight,
-                          specularColor,
-                          reflectionProb, diffuseProb,
-                          transmissionProb);
-        
-        float rnd = next_float(rng);
-        if (transmissionProb > 0.0 && rnd < transmissionProb) {
-            nextRayType = RAY_TYPE_REFRACTION;
-            bool glassReflected = false;
-            float glassBranchProbability = 1.0;
-            if (BuildTransmissionContinuation(
-                    rayDir, normal, roughness, ior, thinWalled, rng,
-                    nextDirection, glassReflected, glassBranchProbability)) {
-                nextRayType = glassReflected ? RAY_TYPE_REFLECTION
-                                             : RAY_TYPE_REFRACTION;
-                float3 glassTint =
-                    glassReflected ? saturate(specularColor)
-                                   : saturate(transmissionTint) *
-                                         saturate(transmission);
-                nextThroughput =
-                    state.throughput * glassTint /
-                    max(transmissionProb * glassBranchProbability, 1.0e-4);
-            } else {
-                nextThroughput = float3(0.0, 0.0, 0.0);
-            }
-        } else if (reflectionProb > 0.0 && rnd < (transmissionProb + reflectionProb)) {
+        if (deterministicMirrorDielectric) {
             nextRayType = RAY_TYPE_REFLECTION;
-            if (BuildSpecularContinuation(rayDir, normal, roughness, rng,
-                                          nextDirection)) {
-                nextThroughput = state.throughput * saturate(specularAlbedo) / max(reflectionProb, 1.0e-4);
-            } else {
-                nextThroughput = float3(0.0, 0.0, 0.0);
-            }
-        } else {
-            nextRayType = RAY_TYPE_DIFFUSE;
-            nextDirection = BuildDiffuseContinuation(normal, rng);
+            nextDirection = normalize(reflect(rayDir, normal));
+            float fresnel =
+                saturate(FresnelDielectric(dot(-rayDir, normal), ior) *
+                         specularWeight);
             nextThroughput =
-                state.throughput * saturate(diffuseAlbedo) /
-                max(diffuseProb, 1.0e-4);
+                state.throughput * max(specularColor, float3(0.0, 0.0, 0.0)) *
+                fresnel;
+        } else {
+            // Evaluate probabilities for path continuation to avoid hard cut-offs
+            float transmissionProb = 0.0;
+            float reflectionProb = 0.0;
+            float diffuseProb = 0.0;
+            ComputeWavefrontLobeProbabilities(normal, -rayDir,
+                              albedo, metallic, transmission,
+                              translucency, ior, specularWeight,
+                              specularColor,
+                              reflectionProb, diffuseProb,
+                              transmissionProb);
+            
+            float rnd = next_float(rng);
+            if (transmissionProb > 0.0 && rnd < transmissionProb) {
+                nextRayType = RAY_TYPE_REFRACTION;
+                bool glassReflected = false;
+                float glassBranchProbability = 1.0;
+                if (BuildTransmissionContinuation(
+                        rayDir, normal, roughness, ior, thinWalled, rng,
+                        nextDirection, glassReflected, glassBranchProbability)) {
+                    nextRayType = glassReflected ? RAY_TYPE_REFLECTION
+                                                 : RAY_TYPE_REFRACTION;
+                    float3 glassTint =
+                        glassReflected ? saturate(specularColor)
+                                       : saturate(transmissionTint) *
+                                             saturate(transmission);
+                    nextThroughput =
+                        state.throughput * glassTint /
+                        max(transmissionProb * glassBranchProbability, 1.0e-4);
+                } else {
+                    nextThroughput = float3(0.0, 0.0, 0.0);
+                }
+            } else if (reflectionProb > 0.0 && rnd < (transmissionProb + reflectionProb)) {
+                nextRayType = RAY_TYPE_REFLECTION;
+                if (BuildSpecularContinuation(rayDir, normal, roughness, rng,
+                                              nextDirection)) {
+                    nextThroughput = state.throughput * saturate(specularAlbedo) / max(reflectionProb, 1.0e-4);
+                } else {
+                    nextThroughput = float3(0.0, 0.0, 0.0);
+                }
+            } else {
+                nextRayType = RAY_TYPE_DIFFUSE;
+                nextDirection = BuildDiffuseContinuation(normal, rng);
+                nextThroughput =
+                    state.throughput * saturate(diffuseAlbedo) /
+                    max(diffuseProb, 1.0e-4);
+            }
         }
         nextThroughput = max(nextThroughput, 0.0);
 

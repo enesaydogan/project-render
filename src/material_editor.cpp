@@ -981,7 +981,7 @@ void Draw(HWND hwnd, bool &visible) {
         if (!MaterialSystem::MaterialsEqual(beforeEdit, mat)) {
           Asset::Material updated = mat;
           g_loadedMaterials[matIdx] = beforeEdit;
-          Scene::UpdateMaterial(static_cast<size_t>(matIdx), updated);
+          Scene::UpdateMaterial(static_cast<size_t>(matIdx), updated, false);
         }
 
         ImGui::PopID();

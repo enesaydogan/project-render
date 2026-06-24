@@ -403,7 +403,8 @@ bool RebindNodeMaterialSlot(size_t nodeIndex, size_t materialSlot,
                             int materialIndex);
 bool UpdateNodeMaterialSourceName(size_t nodeIndex, size_t materialSlot,
                                   const std::string &materialName);
-bool UpdateMaterial(size_t index, const Asset::Material &material);
+bool UpdateMaterial(size_t index, const Asset::Material &material,
+                    bool refreshTextureCompression = true);
 void RefreshAllMaterialRuntimeTextures();
 void RefreshTextureCompression(bool resetAccumulation = true);
 GpuUploadStats GetGpuUploadStats();

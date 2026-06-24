@@ -1833,7 +1833,52 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             const bool deterministicThinGlass =
                 IsPrimaryThinGlassFastPath(roughness, transmission, ior,
                                            thinWalled);
-            if (deterministicThinGlass) {
+            const bool deterministicMirrorDielectric =
+                !deterministicThinGlass &&
+                roughness <= 0.01 &&
+                transmission <= 1.0e-4 &&
+                metallic <= 0.05 &&
+                specularWeight > 1.0e-4;
+            if (deterministicMirrorDielectric) {
+                float fresnel =
+                    saturate(FresnelDielectric(dot(-rayDir, normal), ior) *
+                             specularWeight);
+                float3 reflectionDirection = normalize(reflect(rayDir, normal));
+                float3 reflectionThroughput =
+                    state.throughput *
+                    max(specularColor, float3(0.0, 0.0, 0.0)) * fresnel;
+                if (any(reflectionThroughput > 1.0e-4) &&
+                    WavefrontHasBounceBudget(state.packedState,
+                                             RAY_TYPE_REFLECTION,
+                                             maxSpecularBounceCount,
+                                             maxRefractiveBounceCount,
+                                             maxDiffuseBounceCount)) {
+                    uint secondaryIndex = 0u;
+                    InterlockedAdd(
+                        g_wavefrontQueueCounters[kWavefrontSecondaryQueueCounter],
+                        1u, secondaryIndex);
+                    if (secondaryIndex < pathQueueCapacity) {
+                        EmitWavefrontSecondaryPath(
+                            secondaryIndex,
+                            record.pixelIndex,
+                            hitPos + reflectionDirection * kWavefrontRayBias,
+                            reflectionDirection,
+                            rng.state ^ 0xA511E9B3u,
+                            reflectionThroughput,
+                            WavefrontAdvancePackedState(
+                                state.packedState, RAY_TYPE_REFLECTION));
+                        InterlockedAdd(g_wavefrontStats[11], 1u,
+                                       previousValue);
+                        InterlockedAdd(g_wavefrontStats[16], 1u,
+                                       previousValue);
+                        InterlockedAdd(g_wavefrontStats[18], 1u,
+                                       previousValue);
+                    } else {
+                        InterlockedAdd(g_wavefrontStats[21], 1u,
+                                       previousValue);
+                    }
+                }
+            } else if (deterministicThinGlass) {
                 float fresnel =
                     saturate(FresnelDielectric(dot(-rayDir, normal), ior) *
                              specularWeight);
