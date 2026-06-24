@@ -5748,7 +5748,7 @@ bool UpdateMaterial(size_t index, const Asset::Material &material) {
   Asset::Material &dst = g_loadedMaterials[index];
   Asset::Material updatedMaterial = material;
   RefreshMaterialRuntimeTexture(updatedMaterial);
-  if (memcmp(&dst, &updatedMaterial, sizeof(Asset::Material)) == 0) {
+  if (MaterialSystem::MaterialsEqual(dst, updatedMaterial)) {
     return true;
   }
   const std::string previousName = dst.name;

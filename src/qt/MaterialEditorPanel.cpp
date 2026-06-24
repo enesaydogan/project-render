@@ -2812,17 +2812,21 @@ void MaterialEditorPanel::applyMaterialChange(const std::function<void(Asset::Ma
     if (idx < 0) {
         return;
     }
-    Asset::Material &mat = g_loadedMaterials[idx];
-    const Asset::Material before = mat;
-    fn(mat);
+    const Asset::Material before = g_loadedMaterials[idx];
+    Asset::Material updated = before;
+    fn(updated);
 
     const bool structureChanged =
-        MaterialAffectsRtStructure(before) != MaterialAffectsRtStructure(mat);
+        MaterialAffectsRtStructure(before) != MaterialAffectsRtStructure(updated);
+    const bool changed = !MaterialSystem::MaterialsEqual(before, updated);
 
-    if (markOpacityDirty || structureChanged || requestAsRebuild) {
+    if (changed) {
+        Scene::UpdateMaterial(static_cast<size_t>(idx), updated);
+    } else if (markOpacityDirty || structureChanged || requestAsRebuild) {
         DxrRenderer::MarkMaterialDirty(idx);
     }
     DxrRenderer::ResetAccumulation();
+    const Asset::Material &mat = g_loadedMaterials[idx];
     m_syncing = true;
     syncInspectorMaterialState(mat, refreshTextureUi);
     m_syncing = false;

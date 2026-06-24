@@ -20,6 +20,11 @@ bool IsSupportedPackedTextureFormat(DXGI_FORMAT format) {
          format == DXGI_FORMAT_R32G32B32A32_FLOAT;
 }
 
+template <size_t N>
+bool EqualFloatArray(const float (&a)[N], const float (&b)[N]) {
+  return std::equal(a, a + N, b);
+}
+
 uint8_t FloatToByte(float value) {
   const float clamped = (std::clamp)(value, 0.0f, 1.0f);
   return static_cast<uint8_t>(clamped * 255.0f + 0.5f);
@@ -29,7 +34,7 @@ uint8_t SampleTextureMono8(const Asset::Texture &texture, uint32_t dstX,
                           uint32_t dstY, uint32_t dstWidth,
                           uint32_t dstHeight) {
   if (texture.width == 0 || texture.height == 0 || texture.cpuData.empty() ||
-      !IsSupportedPackedTextureFormat(texture.format)) {
+      !IsSupportedPackedTextureFormat(texture.cpuFormat)) {
     return 255;
   }
 
@@ -43,7 +48,7 @@ uint8_t SampleTextureMono8(const Asset::Texture &texture, uint32_t dstX,
                             : 0;
   const size_t pixelIndex = static_cast<size_t>(srcY) * texture.width + srcX;
 
-  if (texture.format == DXGI_FORMAT_R32G32B32A32_FLOAT) {
+  if (texture.cpuFormat == DXGI_FORMAT_R32G32B32A32_FLOAT) {
     const size_t base = pixelIndex * 4;
     const size_t floatCount = texture.cpuData.size() / sizeof(float);
     if (base + 2 >= floatCount) {
@@ -367,6 +372,84 @@ bool MaterialAffectsRtStructure(const Asset::Material &material) {
          material.thinWalled > 0.5f;
 }
 
+bool MaterialsEqual(const Asset::Material &a, const Asset::Material &b) {
+  return std::strncmp(a.name, b.name, sizeof(a.name)) == 0 &&
+         EqualFloatArray(a.diffuseColor, b.diffuseColor) &&
+         a.metalness == b.metalness && a.ior == b.ior &&
+         EqualFloatArray(a.emissiveColor, b.emissiveColor) &&
+         a.emissiveIntensity == b.emissiveIntensity &&
+         a.thinWalled == b.thinWalled && a.translucency == b.translucency &&
+         EqualFloatArray(a.uvScale, b.uvScale) &&
+         EqualFloatArray(a.uvOffset, b.uvOffset) &&
+         a.uvRotationDegrees == b.uvRotationDegrees &&
+         a.triPlanarEnabled == b.triPlanarEnabled &&
+         a.triPlanarScale == b.triPlanarScale &&
+         a.triPlanarSharpness == b.triPlanarSharpness &&
+         a.triPlanarNormalStrength == b.triPlanarNormalStrength &&
+         EqualFloatArray(a.triPlanarRotationDegrees,
+                         b.triPlanarRotationDegrees) &&
+         a.triPlanarVariationMode == b.triPlanarVariationMode &&
+         a.triPlanarVariationOffset == b.triPlanarVariationOffset &&
+         a.stochasticTilingRotationDegrees ==
+             b.stochasticTilingRotationDegrees &&
+         a.stochasticTilingColorVariation == b.stochasticTilingColorVariation &&
+         a.stochasticTilingMirror == b.stochasticTilingMirror &&
+         a.diffuseTexture == b.diffuseTexture &&
+         a.normalTexture == b.normalTexture &&
+         a.opacityTexture == b.opacityTexture &&
+         a.emissiveTexture == b.emissiveTexture &&
+         a.occlusionTexture == b.occlusionTexture &&
+         a.metalRoughTexture == b.metalRoughTexture &&
+         a.runtimeMetalRoughTexture == b.runtimeMetalRoughTexture &&
+         a.metalnessTexture == b.metalnessTexture &&
+         a.roughnessGlossTexture == b.roughnessGlossTexture &&
+         a.specularColorTexture == b.specularColorTexture &&
+         a.thicknessTexture == b.thicknessTexture &&
+         a.coatNormalTexture == b.coatNormalTexture &&
+         a.parallaxTexture == b.parallaxTexture &&
+         a.diffuseTextureAmount == b.diffuseTextureAmount &&
+         a.opacityTextureAmount == b.opacityTextureAmount &&
+         a.metalRoughTextureAmount == b.metalRoughTextureAmount &&
+         a.metalnessTextureAmount == b.metalnessTextureAmount &&
+         a.roughnessGlossTextureAmount == b.roughnessGlossTextureAmount &&
+         a.normalTextureAmount == b.normalTextureAmount &&
+         a.normalMapFlipY == b.normalMapFlipY &&
+         a.useBumpMap == b.useBumpMap &&
+         a.occlusionTextureAmount == b.occlusionTextureAmount &&
+         a.emissiveTextureAmount == b.emissiveTextureAmount &&
+         a.specularColorTextureAmount == b.specularColorTextureAmount &&
+         a.thicknessTextureAmount == b.thicknessTextureAmount &&
+         a.coatNormalTextureAmount == b.coatNormalTextureAmount &&
+         a.parallaxMode == b.parallaxMode &&
+         a.parallaxDepthScale == b.parallaxDepthScale &&
+         a.parallaxRoomDepth == b.parallaxRoomDepth &&
+         a.parallaxWindowAspect == b.parallaxWindowAspect &&
+         EqualFloatArray(a.parallaxUvScale, b.parallaxUvScale) &&
+         EqualFloatArray(a.parallaxUvOffset, b.parallaxUvOffset) &&
+         a.parallaxBackFace == b.parallaxBackFace &&
+         a.doubleSided == b.doubleSided && a.alphaMode == b.alphaMode &&
+         a.invertRoughnessTexture == b.invertRoughnessTexture &&
+         a.alphaCutoff == b.alphaCutoff && a.isGrass == b.isGrass &&
+         EqualFloatArray(a.grassColor, b.grassColor) &&
+         a.grassBladeSize == b.grassBladeSize &&
+         a.grassBladeCount == b.grassBladeCount &&
+         a.grassBladeVariation == b.grassBladeVariation &&
+         a.schemaVersion == b.schemaVersion &&
+         a.materialClass == b.materialClass && a.workflow == b.workflow &&
+         a.roughness == b.roughness &&
+         a.specularWeight == b.specularWeight &&
+         EqualFloatArray(a.specularColor, b.specularColor) &&
+         a.transmissionWeight == b.transmissionWeight &&
+         EqualFloatArray(a.transmissionColor, b.transmissionColor) &&
+         a.thickness == b.thickness &&
+         a.attenuationDistance == b.attenuationDistance &&
+         a.coatWeight == b.coatWeight && a.coatRoughness == b.coatRoughness &&
+         a.coatIor == b.coatIor && a.anisotropy == b.anisotropy &&
+         a.anisotropyRotation == b.anisotropyRotation &&
+         a.sheenWeight == b.sheenWeight &&
+         EqualFloatArray(a.sheenColor, b.sheenColor);
+}
+
 int GetTextureIndex(const Asset::Material &material, TextureSlot slot) {
   switch (slot) {
   case TextureSlot::BaseColor:
@@ -429,42 +512,86 @@ float GetTextureAmount(const Asset::Material &material, TextureSlot slot) {
 
 void SetTextureIndex(Asset::Material &material, TextureSlot slot,
                      int textureIndex) {
+  const bool assigningTexture = textureIndex >= 0;
   switch (slot) {
   case TextureSlot::BaseColor:
     material.diffuseTexture = textureIndex;
     break;
   case TextureSlot::Opacity:
     material.opacityTexture = textureIndex;
+    if (assigningTexture && material.alphaMode == "OPAQUE") {
+      material.alphaMode = "MASK";
+    }
     break;
   case TextureSlot::PackedSurface:
     material.metalRoughTexture = textureIndex;
+    if (assigningTexture && material.metalness <= kMaterialFlagEpsilon) {
+      material.metalness = 1.0f;
+    }
     break;
   case TextureSlot::Metalness:
     material.metalnessTexture = textureIndex;
+    if (assigningTexture && material.metalness <= kMaterialFlagEpsilon) {
+      material.metalness = 1.0f;
+    }
     break;
   case TextureSlot::RoughnessOrGlossiness:
     material.roughnessGlossTexture = textureIndex;
+    if (assigningTexture && material.roughness <= kMaterialFlagEpsilon) {
+      material.roughness = 1.0f;
+    }
     break;
   case TextureSlot::Normal:
     material.normalTexture = textureIndex;
     break;
   case TextureSlot::CoatNormal:
     material.coatNormalTexture = textureIndex;
+    if (assigningTexture && material.coatWeight <= kMaterialFlagEpsilon) {
+      material.coatWeight = 0.25f;
+    }
     break;
   case TextureSlot::Occlusion:
     material.occlusionTexture = textureIndex;
     break;
   case TextureSlot::Emissive:
     material.emissiveTexture = textureIndex;
+    if (assigningTexture) {
+      const float maxEmission =
+          (std::max)(material.emissiveColor[0],
+                     (std::max)(material.emissiveColor[1],
+                                material.emissiveColor[2]));
+      if (maxEmission <= kMaterialFlagEpsilon) {
+        material.emissiveColor[0] = 1.0f;
+        material.emissiveColor[1] = 1.0f;
+        material.emissiveColor[2] = 1.0f;
+      }
+      if (material.emissiveIntensity <= kMaterialFlagEpsilon) {
+        material.emissiveIntensity = 1.0f;
+      }
+    }
     break;
   case TextureSlot::SpecularColor:
     material.specularColorTexture = textureIndex;
+    if (assigningTexture && material.specularWeight <= kMaterialFlagEpsilon) {
+      material.specularWeight = 1.0f;
+    }
     break;
   case TextureSlot::Thickness:
     material.thicknessTexture = textureIndex;
+    if (assigningTexture && material.thickness <= kMaterialFlagEpsilon) {
+      material.thickness = 1.0f;
+    }
     break;
   case TextureSlot::Parallax:
     material.parallaxTexture = textureIndex;
+    if (assigningTexture) {
+      if (material.parallaxMode == Asset::Material::kParallaxModeOff) {
+        material.parallaxMode = Asset::Material::kParallaxModeHeightMap;
+      }
+      if (material.parallaxDepthScale <= kMaterialFlagEpsilon) {
+        material.parallaxDepthScale = 0.03f;
+      }
+    }
     break;
   }
 }
@@ -528,7 +655,7 @@ bool BuildDerivedPackedSurfaceTexture(
   uint32_t height = 0;
   const auto considerTexture = [&](const Asset::Texture *texture) {
     if (!texture || texture->cpuData.empty() ||
-        !IsSupportedPackedTextureFormat(texture->format)) {
+        !IsSupportedPackedTextureFormat(texture->cpuFormat)) {
       return;
     }
     width = (std::max)(width, texture->width);

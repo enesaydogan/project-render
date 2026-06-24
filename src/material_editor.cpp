@@ -358,6 +358,7 @@ void Draw(HWND hwnd, bool &visible) {
           DxrRenderer::ResetAccumulation();
         int matIdx = s_selectedMaterial;
         Asset::Material &mat = g_loadedMaterials[matIdx];
+        const Asset::Material beforeEdit = mat;
         auto MarkOpacityDirty = [&]() {
           DxrRenderer::MarkMaterialDirty(matIdx);
           DxrRenderer::ResetAccumulation();
@@ -975,6 +976,12 @@ void Draw(HWND hwnd, bool &visible) {
           }
 
           ImGui::EndTabBar();
+        }
+
+        if (!MaterialSystem::MaterialsEqual(beforeEdit, mat)) {
+          Asset::Material updated = mat;
+          g_loadedMaterials[matIdx] = beforeEdit;
+          Scene::UpdateMaterial(static_cast<size_t>(matIdx), updated);
         }
 
         ImGui::PopID();

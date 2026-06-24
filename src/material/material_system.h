@@ -106,6 +106,7 @@ uint32_t ClampMaterialClass(uint32_t materialClass);
 void ApplyMaterialClassAuthoringDefaults(Asset::Material &material,
                                          uint32_t materialClass);
 bool MaterialAffectsRtStructure(const Asset::Material &material);
+bool MaterialsEqual(const Asset::Material &a, const Asset::Material &b);
 
 int GetTextureIndex(const Asset::Material &material, TextureSlot slot);
 void SetTextureIndex(Asset::Material &material, TextureSlot slot, int textureIndex);
