@@ -297,6 +297,7 @@ bool ParsePayload(const SceneDeltaKind kind, const json &payloadJson,
       payloadJson.value("normalTextureAmount", 1.0f);
     payload.normalMapFlipY = payloadJson.value(
         "normalMapFlipY", payloadJson.value("normalMapOpenGl", false));
+    payload.useBumpMap = payloadJson.value("useBumpMap", false);
     payload.coatNormalTextureAmount =
       payloadJson.value("coatNormalTextureAmount", 1.0f);
     payload.occlusionTextureAmount =

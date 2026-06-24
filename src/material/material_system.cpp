@@ -564,7 +564,8 @@ bool BuildDerivedPackedSurfaceTexture(
             static_cast<float>(SampleTextureMono8(*roughnessOrGlossinessTexture,
                                                   x, y, width, height)) /
             255.0f;
-        if (UsesReflectionGlossiness(material)) {
+        if (UsesReflectionGlossiness(material) ||
+            material.invertRoughnessTexture) {
           sampledMicrosurface = 1.0f - sampledMicrosurface;
         }
         roughness = FloatToByte((std::lerp)(1.0f, sampledMicrosurface,

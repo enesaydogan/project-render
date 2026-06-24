@@ -240,6 +240,11 @@ void ApplyPhysicalMaterialParameters(Interface *ip, Mtl *material,
                   &snapshot->baseColorTexturePayload);
   bindPhysTexture("bump_map", "bump_map_on", &snapshot->normalTextureUri,
                   &snapshot->normalTexturePayload);
+  if (HasMaterialTexture(snapshot->normalTextureUri,
+                         snapshot->normalTexturePayload)) {
+    snapshot->useBumpMap = true;
+    snapshot->normalTextureAmount = 1.0f;
+  }
   bindPhysTexture("coat_bump_map", "coat_bump_map_on",
                   &snapshot->coatNormalTextureUri,
                   &snapshot->coatNormalTexturePayload);
@@ -251,7 +256,7 @@ void ApplyPhysicalMaterialParameters(Interface *ip, Mtl *material,
     snapshot->alphaMode = "MASK";
   }
 
-  // --- Split metal/rough maps: honest gap, do not pack (needs PMAT v4) ---
+  // --- Split metal/rough maps ---
   Texmap *roughnessMap = nullptr;
   Texmap *metalnessMap = nullptr;
   const bool hasRoughMap =
@@ -262,12 +267,41 @@ void ApplyPhysicalMaterialParameters(Interface *ip, Mtl *material,
       TryGetAnimatableTexmapParamByName(material, time, "metalness_map",
                                         &metalnessMap) &&
       metalnessMap;
-  if (hasRoughMap || hasMetalMap) {
+  if (hasRoughMap) {
+    TextureBindingSnapshot binding;
+    if (TryResolveTexmapTextureBinding(ip, roughnessMap, &binding)) {
+      ApplyTextureBinding(std::move(binding),
+                          &snapshot->roughnessGlossTextureUri,
+                          &snapshot->roughnessGlossTexturePayload, snapshot);
+      snapshot->roughnessGlossTextureAmount = 1.0f;
+      snapshot->invertRoughnessTexture = false;
+    } else {
+      pushDiag(MaterialDiagnosticSeverity::Warning,
+               MaterialConversionOutcome::Unsupported,
+               "Physical Material roughness map could not be resolved.");
+    }
+  }
+  if (hasMetalMap) {
+    TextureBindingSnapshot binding;
+    if (TryResolveTexmapTextureBinding(ip, metalnessMap, &binding)) {
+      ApplyTextureBinding(std::move(binding), &snapshot->metalnessTextureUri,
+                          &snapshot->metalnessTexturePayload, snapshot);
+      snapshot->metalnessTextureAmount = 1.0f;
+    } else {
+      pushDiag(MaterialDiagnosticSeverity::Warning,
+               MaterialConversionOutcome::Unsupported,
+               "Physical Material metalness map could not be resolved.");
+    }
+  }
+  if ((hasRoughMap &&
+       !HasMaterialTexture(snapshot->roughnessGlossTextureUri,
+                           snapshot->roughnessGlossTexturePayload)) ||
+      (hasMetalMap && !HasMaterialTexture(snapshot->metalnessTextureUri,
+                                          snapshot->metalnessTexturePayload))) {
     pushDiag(MaterialDiagnosticSeverity::Warning,
              MaterialConversionOutcome::Unsupported,
              "Physical Material separate roughness/metalness maps require "
-             "split-texture transport (PMAT v4); scalar values sent, maps not "
-             "yet transported.");
+             "resolvable map inputs; scalar values sent for unresolved maps.");
   }
 
   // --- Displacement: diagnostic only (no transport path yet) ---

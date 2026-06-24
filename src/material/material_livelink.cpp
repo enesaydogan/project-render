@@ -87,6 +87,7 @@ void ApplyPayloadToMaterial(const LiveLink::MaterialChangedPayload &payload,
   material->normalTextureAmount =
       std::clamp(payload.normalTextureAmount, 0.0f, 1.0f);
   material->normalMapFlipY = payload.normalMapFlipY;
+  material->useBumpMap = payload.useBumpMap;
   material->coatNormalTextureAmount =
       std::clamp(payload.coatNormalTextureAmount, 0.0f, 1.0f);
   material->occlusionTextureAmount =
