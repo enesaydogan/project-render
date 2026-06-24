@@ -1090,6 +1090,7 @@ bool LoadGltf(const std::string &path, std::vector<GpuMesh> &outMeshes,
       auto khrIor = m.extensions.find("KHR_materials_ior");
       if (khrIor != m.extensions.end()) {
         mat.ior = (float)GetExtensionNumber(khrIor->second, "ior", mat.ior);
+        mat.reflectionIor = mat.ior;
       }
 
       auto khrSpecular = m.extensions.find("KHR_materials_specular");

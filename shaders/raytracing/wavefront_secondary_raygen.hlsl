@@ -10,6 +10,7 @@ static RayPayload InitWavefrontSecondaryPayload(uint rayType)
     payload.packedAlbedo = PackPayloadAlbedo(float3(0.0, 0.0, 0.0));
     payload.surface = MakePayloadSurface(1.0, 0.0, 0.0, 0.0);
     payload.packedIorType = PackPayloadIorType(1.0, rayType, false, 1.0);
+    payload.packedReflectionIor = PackPayloadIor(1.0);
     payload.packedTransmission = PackPayloadTransmissionColor(float3(1.0, 1.0, 1.0));
     payload.packedSpecular = PackPayloadSpecularColor(float3(1.0, 1.0, 1.0));
     payload.packedParallaxSelfShadow = PackWavefrontParallaxSelfShadow(1.0);
@@ -110,6 +111,7 @@ void WavefrontSecondaryRayGen()
     record.packedNormal = payload.packedNormal;
     record.packedAlbedo = payload.packedAlbedo;
     record.packedIorType = payload.packedIorType;
+    record.packedReflectionIor = payload.packedReflectionIor;
     record.packedTransmission = payload.packedTransmission;
     record.packedSpecular = payload.packedSpecular;
     record.packedState = state.packedState;
@@ -132,6 +134,7 @@ void WavefrontSecondaryRayGen()
     record.guidePackedNormal = payload.packedNormal;
     record.guidePackedAlbedo = payload.packedAlbedo;
     record.guidePackedIorType = payload.packedIorType;
+    record.guidePackedReflectionIor = payload.packedReflectionIor;
     record.guidePackedTransmission = payload.packedTransmission;
     record.guidePackedSpecular = payload.packedSpecular;
     record.guideSurface = payloadSurface;

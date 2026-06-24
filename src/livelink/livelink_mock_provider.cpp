@@ -294,6 +294,7 @@ SceneDelta MockLiveLinkProvider::MakeMaterialDelta(uint64_t revision,
   payload.workflow = 0;
   payload.specularWeight = 1.0f;
   payload.ior = 1.5f;
+  payload.reflectionIor = payload.ior;
   payload.transmissionWeight = 0.0f;
   payload.transmissionColor = {1.0f, 1.0f, 1.0f};
   payload.coatWeight = 0.0f;

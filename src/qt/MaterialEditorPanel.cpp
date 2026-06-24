@@ -948,6 +948,13 @@ void MaterialEditorPanel::createUi()
     m_specularColorButton = new QPushButton(surfaceTab);
     addMappedRow(surfaceForm, tr("Reflection color"), m_specularColorButton,
                  SpecularColor, surfaceTab);
+    m_reflectionIor = CreateSliderControl(MaterialSystem::kMinMaterialIor,
+                                          MaterialSystem::kMaxMaterialIor,
+                                          0.001, 3);
+    m_reflectionIor->setToolTip(
+        tr("Controls dielectric Fresnel/F0 reflection strength without changing refraction bending."));
+    addSliderRow(surfaceForm, tr("Reflection IOR"), m_reflectionIor, -1,
+                 surfaceTab);
 
     m_roughness = CreateSliderControl(0.0, 1.0, 0.01, 3);
     addSliderRow(surfaceForm, tr("Roughness"), m_roughness,
@@ -973,8 +980,8 @@ void MaterialEditorPanel::createUi()
     m_ior = CreateSliderControl(MaterialSystem::kMinMaterialIor,
                                 MaterialSystem::kMaxMaterialIor, 0.001, 3);
     m_ior->setToolTip(
-        tr("Shared dielectric IOR used by reflection Fresnel and refraction."));
-    addSliderRow(surfaceForm, tr("Reflection / refraction IOR"), m_ior, -1,
+        tr("Controls refraction bending/transmission IOR."));
+    addSliderRow(surfaceForm, tr("Refraction IOR"), m_ior, -1,
                  surfaceTab);
 
     addDivider(surfaceForm, surfaceTab);
@@ -1649,6 +1656,14 @@ void MaterialEditorPanel::createUi()
         }
         applyMaterialChange([value](Asset::Material &m) {
             m.specularWeight = static_cast<float>(value);
+        });
+    });
+    connect(m_reflectionIor->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
+        if (m_syncing) {
+            return;
+        }
+        applyMaterialChange([value](Asset::Material &m) {
+            m.reflectionIor = static_cast<float>(value);
         });
     });
     connect(m_ior->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
@@ -2356,6 +2371,7 @@ void MaterialEditorPanel::syncInspectorMaterialState(const Asset::Material &mat,
                                : mat.metalness);
     SyncSliderControlValue(m_specularWeight, mat.specularWeight);
     setColorButton(m_specularColorButton, getColorFromMaterial(mat.specularColor));
+    SyncSliderControlValue(m_reflectionIor, mat.reflectionIor);
     SyncSliderControlValue(m_ior, mat.ior);
     SyncSliderControlValue(m_transmission, mat.transmissionWeight);
     setColorButton(m_transmissionColorButton, getColorFromMaterial(mat.transmissionColor));

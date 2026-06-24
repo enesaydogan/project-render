@@ -93,7 +93,8 @@ struct Material {
   char name[64] = "Material";
   float diffuseColor[4] = {1, 1, 1, 1};
   float metalness = 0.0f; // Added for PBR support
-  float ior = 1.6f;
+  float ior = 1.6f;           // Refraction / transmission IOR.
+  float reflectionIor = 1.6f; // Dielectric Fresnel / reflection IOR.
   float emissiveColor[4] = {0, 0, 0, 1};
   float emissiveIntensity = 1.0f; // Multiplier for emissive
 

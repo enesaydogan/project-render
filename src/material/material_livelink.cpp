@@ -108,6 +108,7 @@ void ApplyPayloadToMaterial(const LiveLink::MaterialChangedPayload &payload,
     material->specularColor[channel] = payload.specularColor[channel];
   }
   material->ior = payload.ior;
+  material->reflectionIor = payload.reflectionIor;
   material->transmissionWeight = payload.transmissionWeight;
   for (size_t channel = 0; channel < payload.transmissionColor.size();
        ++channel) {

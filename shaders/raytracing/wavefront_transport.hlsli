@@ -163,7 +163,7 @@ inline float ComputeWavefrontBrdfPdfForDirection(WavefrontHitRecord record,
     float transmission = saturate(surface.z);
     float translucency = saturate(surface.w);
     float specularWeight = saturate(UnpackPayloadSpecularWeight(record.packedIorType));
-    float ior = UnpackPayloadIor(record.packedIorType);
+    float reflectionIor = UnpackPayloadIor(record.packedReflectionIor);
 
     float3 V = normalize(camPos - hitPos);
     float reflectionProb = 0.0;
@@ -171,7 +171,8 @@ inline float ComputeWavefrontBrdfPdfForDirection(WavefrontHitRecord record,
     float transmissionProb = 0.0;
     ComputeWavefrontLobeProbabilities(worldNormal, V,
                                       baseColor, metallic, transmission,
-                                      translucency, ior, specularWeight,
+                                      translucency, reflectionIor,
+                                      specularWeight,
                                       specularColor,
                                       reflectionProb, diffuseProb,
                                       transmissionProb);
@@ -224,7 +225,7 @@ inline float3 EvaluateWavefrontPrimaryPreview(
     float transmission = saturate(surface.z);
     float translucency = saturate(surface.w);
     float specularWeight = saturate(UnpackPayloadSpecularWeight(record.packedIorType));
-    float ior = UnpackPayloadIor(record.packedIorType);
+    float reflectionIor = UnpackPayloadIor(record.packedReflectionIor);
 
     float3 V = normalize(camPos - hitPos);
     float3 L = normalize(lightDir.xyz);
@@ -235,7 +236,7 @@ inline float3 EvaluateWavefrontPrimaryPreview(
     float VdotH = saturate(dot(V, H));
 
     float3 diffuseColor = baseColor * (1.0 - metallic) * (1.0 - transmission);
-    float3 F0 = ComputeWavefrontSurfaceF0(baseColor, metallic, ior,
+    float3 F0 = ComputeWavefrontSurfaceF0(baseColor, metallic, reflectionIor,
                                           specularWeight, specularColor);
     float alpha = max(roughness * roughness, 0.03);
     float alpha2 = alpha * alpha;
@@ -272,7 +273,7 @@ inline float3 ComputeWavefrontDirectLightingWeightForView(
     float metallic = saturate(surface.y);
     float transmission = saturate(surface.z);
     float specularWeight = saturate(UnpackPayloadSpecularWeight(record.packedIorType));
-    float ior = UnpackPayloadIor(record.packedIorType);
+    float reflectionIor = UnpackPayloadIor(record.packedReflectionIor);
 
     float3 V = normalize(viewDirection);
     float3 L = normalize(lightDirection);
@@ -283,7 +284,7 @@ inline float3 ComputeWavefrontDirectLightingWeightForView(
     float VdotH = saturate(dot(V, H));
 
     float3 diffuseColor = baseColor * (1.0 - metallic) * (1.0 - transmission);
-    float3 F0 = ComputeWavefrontSurfaceF0(baseColor, metallic, ior,
+    float3 F0 = ComputeWavefrontSurfaceF0(baseColor, metallic, reflectionIor,
                                           specularWeight, specularColor);
     float alpha = max(roughness * roughness, 0.03);
     float alpha2 = alpha * alpha;

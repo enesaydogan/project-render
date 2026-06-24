@@ -822,6 +822,7 @@ bool LoadNativeMeshPayload(const std::string &path,
       material.metalness = materialHeader.metalness;
       material.specularWeight = materialHeader.specularWeight;
       material.ior = materialHeader.ior;
+      material.reflectionIor = materialHeader.ior;
       material.transmissionWeight = materialHeader.transmissionWeight;
       std::copy(std::begin(materialHeader.transmissionColor),
                 std::end(materialHeader.transmissionColor),
@@ -964,6 +965,7 @@ bool LoadNativeMaterialLibraryPayload(
       record.payload.metalness = materialHeader.metalness;
       record.payload.specularWeight = materialHeader.specularWeight;
       record.payload.ior = materialHeader.ior;
+      record.payload.reflectionIor = materialHeader.ior;
       record.payload.transmissionWeight = materialHeader.transmissionWeight;
       std::copy(std::begin(materialHeader.transmissionColor),
                 std::end(materialHeader.transmissionColor),

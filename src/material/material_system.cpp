@@ -173,6 +173,7 @@ void ApplyMaterialClassAuthoringDefaults(Asset::Material &m,
     m.metalness = 0.0f;
     m.transmissionWeight = (std::max)(m.transmissionWeight, 1.0f);
     m.ior = (std::clamp)(m.ior, 1.3f, 1.8f);
+    m.reflectionIor = (std::clamp)(m.reflectionIor, 1.3f, 1.8f);
     if (m.diffuseColor[3] >= 0.999f) {
       m.diffuseColor[3] = 0.35f;
     }
@@ -358,6 +359,7 @@ void ApplyPreset(Asset::Material &m, int presetIndex) {
     m.thinWalled = 1.0f;
     break;
   }
+  m.reflectionIor = m.ior;
 }
 
 bool MaterialAffectsRtStructure(const Asset::Material &material) {
@@ -376,6 +378,7 @@ bool MaterialsEqual(const Asset::Material &a, const Asset::Material &b) {
   return std::strncmp(a.name, b.name, sizeof(a.name)) == 0 &&
          EqualFloatArray(a.diffuseColor, b.diffuseColor) &&
          a.metalness == b.metalness && a.ior == b.ior &&
+         a.reflectionIor == b.reflectionIor &&
          EqualFloatArray(a.emissiveColor, b.emissiveColor) &&
          a.emissiveIntensity == b.emissiveIntensity &&
          a.thinWalled == b.thinWalled && a.translucency == b.translucency &&
@@ -969,7 +972,7 @@ void BuildRuntimeDxrMaterialData(const Asset::Material &material,
   outExtra->parallaxTransform[3] =
       (std::clamp)(material.parallaxUvOffset[1], -100.0f, 100.0f);
   outExtra->parallaxOptions[0] = material.parallaxBackFace ? 1.0f : 0.0f;
-  outExtra->parallaxOptions[1] = 0.0f;
+  outExtra->parallaxOptions[1] = ClampDielectricIor(material.reflectionIor);
   outExtra->parallaxOptions[2] = 0.0f;
   outExtra->parallaxOptions[3] = 0.0f;
 }
@@ -1132,7 +1135,8 @@ void BuildRuntimeRasterMaterialConstants(
   outConstants->parallaxTransform[3] =
       (std::clamp)(material.parallaxUvOffset[1], -100.0f, 100.0f);
   outConstants->parallaxOptions[0] = material.parallaxBackFace ? 1.0f : 0.0f;
-  outConstants->parallaxOptions[1] = 0.0f;
+  outConstants->parallaxOptions[1] =
+      ClampDielectricIor(material.reflectionIor);
   outConstants->parallaxOptions[2] = 0.0f;
   outConstants->parallaxOptions[3] = 0.0f;
 }

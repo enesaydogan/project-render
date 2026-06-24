@@ -108,7 +108,7 @@ cbuffer MaterialCB : register(b1)
     float4 diffuseColor;        // rgb, a=opacity
     float4 surfaceParams;       // x=roughness, y=metalness, z=specularWeight
     float4 transmissionParams;  // rgb=transmissionColor, a=transmissionWeight
-    float4 emissiveColor;       // rgb, w=ior
+    float4 emissiveColor;       // rgb, w=refraction IOR
     int4 textureIndices;        // x=diffuse, y=opacity, z=normal, w=specularColor
     int4 emissiveAndPad;        // x=emissive, y=occlusion, z=metalRough
     float4 extraParams;         // x=emissiveIntensity, y=alphaCutoff, z=isMask, w=isGrass
@@ -128,7 +128,7 @@ cbuffer MaterialCB : register(b1)
     float4 lobeParams;          // x=anisotropy, y=anisoRotation, z=sheenWeight, w=coatNormalAmount
     float4 parallaxParams;      // x=heightDepth, y=mode, z=roomDepth, w=windowAspect
     float4 parallaxTransform;   // xy=uvScale, zw=uvOffset
-    float4 parallaxOptions;     // x=renderWindowBoxOnBackFace
+    float4 parallaxOptions;     // x=renderWindowBoxOnBackFace, y=reflectionIor
 };
 
 cbuffer GrassDrawCB : register(b3)
@@ -1717,7 +1717,7 @@ PSOutput PSMainMesh(PSInputMesh input, uint primitiveId : SV_PrimitiveID)
     }
 
     // OpenPBR subset: dielectric F0 from IOR scaled by specular weight.
-    float ior = max(emissiveColor.w, 1.0);
+    float reflectionIor = max(parallaxOptions.y, 1.0);
     float specularWeight = clayMode ? 0.0 : saturate(surfaceParams.z);
     float3 specularTint = saturate(specularColor.rgb);
     if (!clayMode && textureIndices.w >= 0) {
@@ -1725,7 +1725,7 @@ PSOutput PSMainMesh(PSInputMesh input, uint primitiveId : SV_PrimitiveID)
                                       : SampleUvTexture(textureIndices.w, uv, objectOrigin, worldNormal, primitiveId, false).rgb;
         specularTint *= BlendTextureRgb(sRGBToLinear(specSample), textureWeight2.z);
     }
-    float f0s = (ior - 1.0) / (ior + 1.0);
+    float f0s = (reflectionIor - 1.0) / (reflectionIor + 1.0);
     f0s = f0s * f0s;
     float3 dielectricF0 = float3(f0s, f0s, f0s) * specularWeight * specularTint;
     float3 F0 = lerp(dielectricF0, BaseColor, metalness);

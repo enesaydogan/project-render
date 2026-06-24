@@ -207,6 +207,7 @@ struct MaterialChangedPayload {
   float specularWeight = 1.0f;
   std::array<float, 3> specularColor = {1.0f, 1.0f, 1.0f};
   float ior = 1.5f;
+  float reflectionIor = 1.5f;
   float transmissionWeight = 0.0f;
   std::array<float, 3> transmissionColor = {1.0f, 1.0f, 1.0f};
   float thickness = 0.0f;

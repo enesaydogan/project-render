@@ -462,7 +462,7 @@ static const uint MATERIAL_FLAG_PARALLAX_MAPPED = 1u << 12;
 struct MaterialData
 {
     float4 baseColor_opacity;   // rgb + opacity
-    float4 emissive_ior;        // rgb + ior
+    float4 emissive_ior;        // rgb + refraction IOR
     float4 pbrParams_flags;     // x=metalness, y=roughness, z=transmission, w=flags (asfloat)
     uint4  packedTextures;      // 8x 16-bit indices packed as pairs
 };
@@ -486,7 +486,7 @@ struct MaterialExtraData
     float4 lobeParams;          // x=coatNormalAmount, y=anisotropy, z=anisoRotationDeg, w=sheenWeight
     float4 parallaxParams;      // x=heightDepth, y=mode, z=roomDepth, w=windowAspect
     float4 parallaxTransform;   // xy=uvScale, zw=uvOffset
-    float4 parallaxOptions;     // x=renderWindowBoxOnBackFace
+    float4 parallaxOptions;     // x=renderWindowBoxOnBackFace, y=reflectionIor
 };
 
 inline int UnpackTextureIndexLow(uint packedPair)
@@ -625,9 +625,9 @@ struct WavefrontPathState
     uint packedState;
 };
 
-static const uint WAVEFRONT_ABI_VERSION = 7u;
+static const uint WAVEFRONT_ABI_VERSION = 8u;
 static const uint WAVEFRONT_PATH_STATE_DWORDS = 12u;
-static const uint WAVEFRONT_HIT_RECORD_DWORDS = 32u;
+static const uint WAVEFRONT_HIT_RECORD_DWORDS = 34u;
 static const uint WAVEFRONT_SHADOW_TASK_DWORDS = 12u;
 static const uint WAVEFRONT_DISPATCH_ARGS_DWORDS = 4u;
 static const uint WAVEFRONT_QUEUE_PATH_A = 0u;
@@ -647,6 +647,7 @@ struct WavefrontHitRecord
     uint packedNormal;
     uint packedAlbedo;
     uint packedIorType;
+    uint packedReflectionIor;
     uint packedTransmission;
     uint packedSpecular;
     uint packedState;
@@ -662,6 +663,7 @@ struct WavefrontHitRecord
     uint guidePackedNormal;
     uint guidePackedAlbedo;
     uint guidePackedIorType;
+    uint guidePackedReflectionIor;
     uint guidePackedTransmission;
     uint guidePackedSpecular;
     float4 guideSurface;
@@ -750,7 +752,8 @@ struct RayPayload
     uint packedColor1;    // B as fp16 (low 16 bits)
     uint packedNormal;    // Octahedral packed normal
     uint packedAlbedo;    // 3x8 UNORM base color
-    uint packedIorType;   // 16-bit half IOR + 8-bit rayType + thin-walled bit
+    uint packedIorType;   // 16-bit half refraction IOR + rayType/thin/specWeight
+    uint packedReflectionIor; // 16-bit half reflection IOR
     uint packedTransmission; // 3x8 UNORM transmission color
     uint packedSpecular;  // 3x8 UNORM specular color
     float4 surface;       // roughness/metallic/transmission/translucency
@@ -1420,9 +1423,14 @@ inline float3 WavefrontEvaluateShadowTaskRadiance(uint packedLightIndex,
     return float3(0.0, 0.0, 0.0);
 }
 
+inline uint PackPayloadIor(float ior)
+{
+    return f32tof16(clamp(ior, 1.0, 10.0)) & 0xFFFFu;
+}
+
 inline uint PackPayloadIorType(float ior, uint rayType, bool thinWalled, float specularWeight)
 {
-    uint hIor = f32tof16(clamp(ior, 1.0, 10.0)) & 0xFFFFu;
+    uint hIor = PackPayloadIor(ior);
     uint thin = thinWalled ? (1u << 24) : 0u;
     uint spec = (((uint)round(saturate(specularWeight) * 127.0)) & 0x7Fu) << 25;
     return hIor | ((rayType & 0xFFu) << 16) | thin | spec;
@@ -1491,6 +1499,7 @@ inline RayPayload InitRayPayload(uint rayType)
     p.packedAlbedo = PackPayloadAlbedo(float3(0.0, 0.0, 0.0));
     p.surface = MakePayloadSurface(1.0, 0.0, 0.0, 0.0);
     p.packedIorType = PackPayloadIorType(1.0, rayType, false, 1.0);
+    p.packedReflectionIor = PackPayloadIor(1.0);
     p.packedTransmission =
         PackPayloadTransmissionColor(float3(1.0, 1.0, 1.0));
     p.packedSpecular = PackPayloadSpecularColor(float3(1.0, 1.0, 1.0));

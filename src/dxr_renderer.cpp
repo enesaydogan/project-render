@@ -179,6 +179,7 @@ struct WavefrontHitRecordGpu {
   uint32_t packedNormal;
   uint32_t packedAlbedo;
   uint32_t packedIorType;
+  uint32_t packedReflectionIor;
   uint32_t packedTransmission;
   uint32_t packedSpecular;
   uint32_t packedState;
@@ -191,11 +192,12 @@ struct WavefrontHitRecordGpu {
   uint32_t guidePackedNormal;
   uint32_t guidePackedAlbedo;
   uint32_t guidePackedIorType;
+  uint32_t guidePackedReflectionIor;
   uint32_t guidePackedTransmission;
   uint32_t guidePackedSpecular;
   float guideSurface[4];
 };
-static_assert(sizeof(WavefrontHitRecordGpu) == 128,
+static_assert(sizeof(WavefrontHitRecordGpu) == 136,
               "WavefrontHitRecordGpu must stay tightly packed.");
 
 struct WavefrontShadowTaskGpu {
@@ -225,9 +227,9 @@ struct WavefrontDispatchRaysRecordGpu {
 static_assert(sizeof(WavefrontDispatchRaysRecordGpu) == 112,
               "WavefrontDispatchRaysRecordGpu must match indirect buffer stride.");
 
-static constexpr UINT kWavefrontAbiVersion = 7;
+static constexpr UINT kWavefrontAbiVersion = 8;
 static constexpr UINT kWavefrontPathStateDwords = 12;
-static constexpr UINT kWavefrontHitRecordDwords = 32;
+static constexpr UINT kWavefrontHitRecordDwords = 34;
 static constexpr UINT kWavefrontShadowTaskDwords = 12;
 static constexpr UINT kWavefrontDispatchArgsDwords = 4;
 static constexpr UINT kWavefrontQueueCounterCount = 16;
@@ -277,7 +279,7 @@ static const char *WavefrontQueueProfileName(WavefrontQueueProfile profile) {
   }
   return "unknown";
 }
-static_assert(kWavefrontAbiVersion == 7,
+static_assert(kWavefrontAbiVersion == 8,
               "Bump shader WAVEFRONT_ABI_VERSION and docs with ABI changes.");
 static_assert(sizeof(WavefrontPathStateGpu) / sizeof(uint32_t) ==
                   kWavefrontPathStateDwords,

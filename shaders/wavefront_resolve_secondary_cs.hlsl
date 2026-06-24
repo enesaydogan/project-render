@@ -234,12 +234,14 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                                (1.0 - transmission);
         float translucency = saturate(surface.w);
         float specularWeight = saturate(UnpackPayloadSpecularWeight(record.packedIorType));
-        float ior = UnpackPayloadIor(record.packedIorType);
+        float refractionIor = UnpackPayloadIor(record.packedIorType);
+        float reflectionIor = UnpackPayloadIor(record.packedReflectionIor);
         bool thinWalled = UnpackPayloadThinWalled(record.packedIorType);
         float3 transmissionTint = UnpackPayloadTransmissionColor(record.packedTransmission);
         float3 specularColor = UnpackPayloadSpecularColor(record.packedSpecular);
         float3 specularAlbedo = ComputeWavefrontSpecularThroughput(
-            albedo, metallic, ior, specularWeight, specularColor, transmission);
+            albedo, metallic, reflectionIor, specularWeight, specularColor,
+            transmission);
         RNG rng;
         rng.state = state.rngState ^
                     (record.pixelIndex * 0x7F4A7C15u) ^ 0xC2B2AE3Du;
@@ -270,7 +272,8 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             nextRayType = RAY_TYPE_REFLECTION;
             nextDirection = normalize(reflect(rayDir, normal));
             float fresnel =
-                saturate(FresnelDielectric(dot(-rayDir, normal), ior) *
+                saturate(FresnelDielectric(dot(-rayDir, normal),
+                                           reflectionIor) *
                          specularWeight);
             nextThroughput =
                 state.throughput * max(specularColor, float3(0.0, 0.0, 0.0)) *
@@ -282,7 +285,7 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             float diffuseProb = 0.0;
             ComputeWavefrontLobeProbabilities(normal, -rayDir,
                               albedo, metallic, transmission,
-                              translucency, ior, specularWeight,
+                              translucency, reflectionIor, specularWeight,
                               specularColor,
                               reflectionProb, diffuseProb,
                               transmissionProb);
@@ -293,7 +296,8 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                 bool glassReflected = false;
                 float glassBranchProbability = 1.0;
                 if (BuildTransmissionContinuation(
-                        rayDir, normal, roughness, ior, thinWalled, rng,
+                        rayDir, normal, roughness, refractionIor, thinWalled,
+                        rng,
                         nextDirection, glassReflected, glassBranchProbability)) {
                     nextRayType = glassReflected ? RAY_TYPE_REFLECTION
                                                  : RAY_TYPE_REFRACTION;

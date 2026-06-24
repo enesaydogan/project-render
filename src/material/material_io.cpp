@@ -250,6 +250,7 @@ nlohmann::json BuildMaterialsMetadata(
         {"tk", mat.thickness},
         {"ad", mat.attenuationDistance},
         {"io", mat.ior},
+        {"rio", mat.reflectionIor},
         {"ec",
          {mat.emissiveColor[0], mat.emissiveColor[1], mat.emissiveColor[2],
           mat.emissiveColor[3]}},
@@ -388,6 +389,8 @@ void RestoreMaterialsFromMetadata(const nlohmann::json &materialsJson,
     material.attenuationDistance =
         savedMaterial.value("ad", material.attenuationDistance);
     material.ior = savedMaterial.value("io", material.ior);
+    material.reflectionIor =
+        savedMaterial.value("rio", savedMaterial.value("io", material.ior));
     if (savedMaterial.contains("ec")) {
       for (int channel = 0; channel < 4; ++channel) {
         material.emissiveColor[channel] = savedMaterial["ec"][channel];

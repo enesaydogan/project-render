@@ -1047,6 +1047,7 @@ bool LoadSkp(const std::string &path, std::vector<GpuMesh> &outMeshes,
         mtl.metalness = 0.0f;
         mtl.roughness = 0.92f;
         mtl.ior = 1.5f;
+        mtl.reflectionIor = mtl.ior;
         mtl.specularWeight = 1.0f;
         mtl.doubleSided = true;
         mtl.workflow = Material::kWorkflowMetalRoughness;

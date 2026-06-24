@@ -1195,7 +1195,7 @@ void ClosestHitImpl(inout RayPayload payload,
 
     // Get material properties
     float4 diffColor = mat.baseColor_opacity;
-    float4 emisColor = mat.emissive_ior; // w=ior
+    float4 emisColor = mat.emissive_ior; // w=refraction IOR
     float4 pbr = mat.pbrParams_flags;    // x=metal, y=rough, z=transmission, w=flags
     uint matFlags = asuint(pbr.w);
 
@@ -1532,7 +1532,8 @@ void ClosestHitImpl(inout RayPayload payload,
     }
 
     // Standard PBR Model (dielectric F0 from IOR)
-    float ior = max(emisColor.w, 1.0);
+    float refractionIor = max(emisColor.w, 1.0);
+    float reflectionIor = max(matExtra.parallaxOptions.y, 1.0);
     float3 specularColor = saturate(specularColorParams.rgb);
     if (texSpecular >= 0) {
         float3 specSample = triPlanar ? SampleTriPlanar(texSpecular, P, worldNormal, triScale, triSharp, samplingVariation, triRotation, objectOrigin, primIndex, textureLod, dominantTriPlanar).rgb
@@ -1540,7 +1541,7 @@ void ClosestHitImpl(inout RayPayload payload,
         specularColor *= BlendTextureRgb(sRGBToLinear(specSample), specularColorParams.a);
         SHADER_COUNTER_ADD(SHADER_COUNTER_TEXTURE_SAMPLES, 1);
     }
-    float f0s = (ior - 1.0) / (ior + 1.0);
+    float f0s = (reflectionIor - 1.0) / (reflectionIor + 1.0);
     f0s = f0s * f0s;
     float3 dielectricF0 = float3(f0s * specularWeight,
                                  f0s * specularWeight,
@@ -1692,7 +1693,9 @@ void ClosestHitImpl(inout RayPayload payload,
         payload.surface =
             MakePayloadSurface(roughness, metalness, transmission, translucency);
         payload.packedIorType =
-            PackPayloadIorType(emisColor.w, rayType, thinWalled, specularWeight);
+            PackPayloadIorType(refractionIor, rayType, thinWalled,
+                               specularWeight);
+        payload.packedReflectionIor = PackPayloadIor(reflectionIor);
         payload.packedTransmission =
             PackPayloadTransmissionColor(effectiveTransmissionColor);
         payload.packedSpecular =
@@ -1735,6 +1738,7 @@ void ClosestHitImpl(inout RayPayload payload,
             shadowPayload.packedAlbedo = PackPayloadAlbedo(float3(0.0, 0.0, 0.0));
             shadowPayload.surface = MakePayloadSurface(1.0, 0.0, 0.0, 0.0);
             shadowPayload.packedIorType = PackPayloadIorType(1.0, RAY_TYPE_SHADOW, false, 1.0);
+            shadowPayload.packedReflectionIor = PackPayloadIor(1.0);
             shadowPayload.packedTransmission = PackPayloadTransmissionColor(float3(1.0, 1.0, 1.0));
             shadowPayload.packedSpecular = PackPayloadSpecularColor(float3(1.0, 1.0, 1.0));
             shadowPayload.packedParallaxSelfShadow =
@@ -1820,7 +1824,10 @@ void ClosestHitImpl(inout RayPayload payload,
                        (arch0.z > 0.5));
     payload.surface =
         MakePayloadSurface(roughness, metalness, transmission, translucency);
-    payload.packedIorType = PackPayloadIorType(emisColor.w, rayType, thinWalled, specularWeight);
+    payload.packedIorType =
+        PackPayloadIorType(refractionIor, rayType, thinWalled,
+                           specularWeight);
+    payload.packedReflectionIor = PackPayloadIor(reflectionIor);
     payload.packedTransmission = PackPayloadTransmissionColor(effectiveTransmissionColor);
     payload.packedSpecular = PackPayloadSpecularColorThickness(specularColor, thickness);
     payload.packedParallaxSelfShadow =

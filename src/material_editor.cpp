@@ -559,7 +559,8 @@ void Draw(HWND hwnd, bool &visible) {
             if (ImGui::ColorEdit3("Specular Color", mat.specularColor))
               DxrRenderer::ResetAccumulation();
 
-            if (ImGui::SliderFloat("IOR", &mat.ior, MaterialSystem::kMinMaterialIor,
+            if (ImGui::SliderFloat("Reflection IOR", &mat.reflectionIor,
+                                   MaterialSystem::kMinMaterialIor,
                                    MaterialSystem::kMaxMaterialIor, "%.3f"))
               DxrRenderer::ResetAccumulation();
 
@@ -573,6 +574,10 @@ void Draw(HWND hwnd, bool &visible) {
             if (ImGui::ColorEdit3("Transmission Color", mat.transmissionColor)) {
               DxrRenderer::ResetAccumulation();
             }
+            if (ImGui::SliderFloat("Refraction IOR", &mat.ior,
+                                   MaterialSystem::kMinMaterialIor,
+                                   MaterialSystem::kMaxMaterialIor, "%.3f"))
+              DxrRenderer::ResetAccumulation();
             if (ImGui::SliderFloat("Thickness", &mat.thickness, 0.0f, 1.0f,
                                    "%.4f"))
               DxrRenderer::ResetAccumulation();

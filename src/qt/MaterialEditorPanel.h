@@ -136,6 +136,7 @@ private:
     SliderControl *m_metalness = nullptr;
     SliderControl *m_specularWeight = nullptr;
     QPushButton *m_specularColorButton = nullptr;
+    SliderControl *m_reflectionIor = nullptr;
     SliderControl *m_ior = nullptr;
     SliderControl *m_transmission = nullptr;
     QPushButton *m_transmissionColorButton = nullptr;

@@ -1373,9 +1373,9 @@ inline float3 EvaluateWavefrontGiSurfaceRadiance(
                                                     specularColorParams.a);
     }
 
-    float ior = max(material.emissive_ior.w, 1.0);
+    float reflectionIor = max(materialExtra.parallaxOptions.y, 1.0);
     float specularWeight = clayMode ? 0.0 : saturate(materialExtra.shadingParams.y);
-    float3 f0 = ComputeWavefrontSurfaceF0(baseColor, metallic, ior,
+    float3 f0 = ComputeWavefrontSurfaceF0(baseColor, metallic, reflectionIor,
                                           specularWeight, specularColor);
     float3 viewDir = normalize(-incomingDirection);
     float3 direct = float3(0.0, 0.0, 0.0);
@@ -1696,14 +1696,17 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                                (1.0 - transmission);
         rrDiffuseAlbedo = diffuseAlbedo;
         float specularWeight = saturate(UnpackPayloadSpecularWeight(record.packedIorType));
-        float ior = UnpackPayloadIor(record.packedIorType);
+        float refractionIor = UnpackPayloadIor(record.packedIorType);
+        float reflectionIor = UnpackPayloadIor(record.packedReflectionIor);
         bool thinWalled = UnpackPayloadThinWalled(record.packedIorType);
         float3 transmissionTint = UnpackPayloadTransmissionColor(record.packedTransmission);
         float3 specularColor = UnpackPayloadSpecularColor(record.packedSpecular);
         specularAlbedo = ComputeWavefrontSpecularThroughput(
-            albedo, metallic, ior, specularWeight, specularColor, transmission);
+            albedo, metallic, reflectionIor, specularWeight, specularColor,
+            transmission);
         {
-            float3 f0 = ComputeWavefrontSurfaceF0(albedo, metallic, ior,
+            float3 f0 = ComputeWavefrontSurfaceF0(albedo, metallic,
+                                                  reflectionIor,
                                                   specularWeight,
                                                   specularColor);
             float nDotV = saturate(dot(normal, -rayDir));
@@ -1831,7 +1834,8 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             // materials still use stochastic continuation so they do not
             // explode queue pressure or destabilize temporal reuse.
             const bool deterministicThinGlass =
-                IsPrimaryThinGlassFastPath(roughness, transmission, ior,
+                IsPrimaryThinGlassFastPath(roughness, transmission,
+                                           refractionIor,
                                            thinWalled);
             const bool deterministicMirrorDielectric =
                 !deterministicThinGlass &&
@@ -1841,7 +1845,8 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                 specularWeight > 1.0e-4;
             if (deterministicMirrorDielectric) {
                 float fresnel =
-                    saturate(FresnelDielectric(dot(-rayDir, normal), ior) *
+                    saturate(FresnelDielectric(dot(-rayDir, normal),
+                                               reflectionIor) *
                              specularWeight);
                 float3 reflectionDirection = normalize(reflect(rayDir, normal));
                 float3 reflectionThroughput =
@@ -1880,7 +1885,8 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                 }
             } else if (deterministicThinGlass) {
                 float fresnel =
-                    saturate(FresnelDielectric(dot(-rayDir, normal), ior) *
+                    saturate(FresnelDielectric(dot(-rayDir, normal),
+                                               reflectionIor) *
                              specularWeight);
                 float3 reflectionDirection = normalize(reflect(rayDir, normal));
                 const bool traceThinGlassReflection =
@@ -1972,7 +1978,7 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                 float diffuseProb = 0.0;
                 ComputeWavefrontLobeProbabilities(normal, -rayDir,
                                   albedo, metallic, transmission,
-                                  translucency, ior, specularWeight,
+                                  translucency, reflectionIor, specularWeight,
                                   specularColor,
                                   reflectionProb, diffuseProb,
                                   transmissionProb);
@@ -1983,7 +1989,8 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                     bool glassReflected = false;
                     float glassBranchProbability = 1.0;
                     if (BuildTransmissionContinuation(
-                            rayDir, normal, roughness, ior, thinWalled, rng,
+                            rayDir, normal, roughness, refractionIor,
+                            thinWalled, rng,
                             nextDirection, glassReflected,
                             glassBranchProbability)) {
                         nextRayType = glassReflected ? RAY_TYPE_REFLECTION
@@ -2195,7 +2202,8 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             float guideSpecularWeight =
                 saturate(UnpackPayloadSpecularWeight(
                     record.guidePackedIorType));
-            float guideIor = UnpackPayloadIor(record.guidePackedIorType);
+            float guideReflectionIor =
+                UnpackPayloadIor(record.guidePackedReflectionIor);
             float3 guideSpecularColor =
                 UnpackPayloadSpecularColor(record.guidePackedSpecular);
 
@@ -2227,8 +2235,8 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             depth = WavefrontDeviceDepth(viewZ);
 
             float3 guideF0 = ComputeWavefrontSurfaceF0(
-                guideAlbedo, guideMetallic, guideIor, guideSpecularWeight,
-                guideSpecularColor);
+                guideAlbedo, guideMetallic, guideReflectionIor,
+                guideSpecularWeight, guideSpecularColor);
             float guideNdotV = saturate(dot(guideNormal, -guideDir));
             rrSpecularAlbedo =
                 EnvBRDFApprox2(guideF0, guideRoughness * guideRoughness,

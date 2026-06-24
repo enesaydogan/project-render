@@ -321,6 +321,7 @@ bool ParsePayload(const SceneDeltaKind kind, const json &payloadJson,
                      &payload.specularColor);
     }
     payload.ior = payloadJson.value("ior", 1.5f);
+    payload.reflectionIor = payloadJson.value("reflectionIor", payload.ior);
     payload.transmissionWeight = payloadJson.value("transmissionWeight", 0.0f);
     if (payloadJson.contains("transmissionColor")) {
       FillFloatArray(payloadJson.at("transmissionColor"),
