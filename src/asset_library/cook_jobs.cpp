@@ -58,13 +58,20 @@ struct CookService::Impl {
       {
         std::unique_lock<std::mutex> lk(mtx);
         cv.wait(lk, [this]() { return stop || !jobs.empty(); });
-        if (stop && jobs.empty())
+        // Shutdown should not drain the backlog; staged/source-backed cooks are
+        // recovered by ResumePendingCooks() on the next launch.
+        if (stop)
           return;
         job = std::move(jobs.front());
         jobs.pop_front();
       }
       std::map<AssetId, Completion> completions;
       for (const CookService::Output &output : job.outputs) {
+        {
+          std::lock_guard<std::mutex> lk(mtx);
+          if (stop)
+            return;
+        }
         const AssetId outputId = output.assetId.valid() ? output.assetId : job.id;
         auto [it, inserted] = completions.try_emplace(outputId);
         Completion &c = it->second;
@@ -95,6 +102,11 @@ struct CookService::Impl {
                     (c.hash >> 2);
         }
         workCompleted.fetch_add(1, std::memory_order_acq_rel);
+        {
+          std::lock_guard<std::mutex> lk(mtx);
+          if (stop)
+            return;
+        }
       }
       {
         std::lock_guard<std::mutex> lk(mtx);

@@ -18,6 +18,7 @@ constexpr uint8_t kMagicTexture[4] = {'P', 'R', 'C', 'T'};
 constexpr uint8_t kMagicVolume[4] = {'P', 'R', 'C', 'V'};
 constexpr uint32_t kCompressNone = 0;
 constexpr uint32_t kCompressLzms = 1;
+constexpr uint32_t kCompressXpressHuff = 2;
 
 // --- Append-only writer (host endianness; matches scene_io.cpp) -------------
 struct Writer {
@@ -98,13 +99,14 @@ struct Reader {
   }
 };
 
-bool CompressLzms(const std::vector<uint8_t> &src, std::vector<uint8_t> &out) {
+bool CompressWithAlgorithm(uint32_t algorithm, const std::vector<uint8_t> &src,
+                           std::vector<uint8_t> &out) {
   if (src.empty()) {
     out.clear();
     return true;
   }
   COMPRESSOR_HANDLE h = nullptr;
-  if (!CreateCompressor(COMPRESS_ALGORITHM_LZMS, nullptr, &h))
+  if (!CreateCompressor(algorithm, nullptr, &h))
     return false;
   SIZE_T needed = 0;
   Compress(h, src.data(), src.size(), nullptr, 0, &needed);
@@ -119,13 +121,14 @@ bool CompressLzms(const std::vector<uint8_t> &src, std::vector<uint8_t> &out) {
   return true;
 }
 
-bool DecompressLzms(const uint8_t *src, size_t srcSize, size_t uncompressedSize,
-                    std::vector<uint8_t> &out) {
+bool DecompressWithAlgorithm(uint32_t algorithm, const uint8_t *src,
+                             size_t srcSize, size_t uncompressedSize,
+                             std::vector<uint8_t> &out) {
   out.clear();
   if (uncompressedSize == 0)
     return true;
   DECOMPRESSOR_HANDLE h = nullptr;
-  if (!CreateDecompressor(COMPRESS_ALGORITHM_LZMS, nullptr, &h))
+  if (!CreateDecompressor(algorithm, nullptr, &h))
     return false;
   out.resize(uncompressedSize);
   SIZE_T actual = 0;
@@ -137,14 +140,17 @@ bool DecompressLzms(const uint8_t *src, size_t srcSize, size_t uncompressedSize,
   return true;
 }
 
-// Wrap a raw payload in a header (magic + version + compression + size) and
-// compress the body. Falls back to store if compression doesn't help.
+// Wrap a raw payload in a header (magic + version + compression + size).
+// XPRESS-HUFF is much faster than LZMS for interactive asset-cache writes, and
+// old LZMS payloads remain readable through OpenBlob().
 bool Finalize(const uint8_t magic[4], uint32_t version,
               const std::vector<uint8_t> &payload, std::vector<uint8_t> &out,
               bool allowCompression = true) {
   std::vector<uint8_t> compressed;
-  uint32_t method = kCompressLzms;
-  if (!allowCompression || !CompressLzms(payload, compressed) ||
+  uint32_t method = kCompressXpressHuff;
+  if (!allowCompression ||
+      !CompressWithAlgorithm(COMPRESS_ALGORITHM_XPRESS_HUFF, payload,
+                             compressed) ||
       compressed.size() >= payload.size()) {
     method = kCompressNone;
     compressed = payload;
@@ -178,7 +184,11 @@ bool OpenBlob(const uint8_t *data, size_t size, const uint8_t magic[4],
     return body.size() == uncompressed;
   }
   if (method == kCompressLzms)
-    return DecompressLzms(bodyPtr, bodyLen, uncompressed, body);
+    return DecompressWithAlgorithm(COMPRESS_ALGORITHM_LZMS, bodyPtr, bodyLen,
+                                   uncompressed, body);
+  if (method == kCompressXpressHuff)
+    return DecompressWithAlgorithm(COMPRESS_ALGORITHM_XPRESS_HUFF, bodyPtr,
+                                   bodyLen, uncompressed, body);
   return false;
 }
 
