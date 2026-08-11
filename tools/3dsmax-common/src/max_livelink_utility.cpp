@@ -246,6 +246,9 @@ constexpr uint64_t kCameraPollMinIntervalMs = 33;
 constexpr uint64_t kTransformVerificationMinIntervalMs = 1500;
 constexpr uint64_t kLargeSceneTransformVerificationMinIntervalMs = 4000;
 constexpr uint64_t kHugeSceneTransformVerificationMinIntervalMs = 8000;
+constexpr uint64_t kMaterialVerificationMinIntervalMs = 3000;
+constexpr uint64_t kLargeSceneMaterialVerificationMinIntervalMs = 5000;
+constexpr uint64_t kHugeSceneMaterialVerificationMinIntervalMs = 8000;
 constexpr uint64_t kSceneOperationSettleDelayMs = 350;
 constexpr uint64_t kResumeStatePersistDelayMs = 2500;
 constexpr size_t kPayloadRemovalBatchSize = 64;
@@ -4703,6 +4706,116 @@ bool CaptureSceneColorMaterialSnapshot(INode *node,
   return true;
 }
 
+// Cheap, read-only material change fingerprint used by the verification sweep.
+// It re-reads only legacy scalar material getters plus the set of populated
+// texmap slot pointers (no texture evaluation or baking). This catches the
+// common live-link material edits -- color, gloss, transparency, emissive,
+// material swap, map assignment/swap -- without paying for a full texture
+// re-bake on every sweep. For Physical Material it also folds in the key
+// authored scalars (base_weight/metalness/roughness/reflectivity/...) that the
+// legacy Mtl getters do not surface. A full snapshot re-capture is triggered
+// only when this cheap fingerprint changes.
+uint64_t ComputeMaterialCheapFingerprint(Interface *ip, INode *node) {
+  uint64_t fingerprint = 1469598103934665603ull;  // FNV-1a offset basis
+  if (!node) {
+    return fingerprint;
+  }
+
+  Mtl *material = node->GetMtl();
+  if (!material) {
+    // No assigned material: the node wire color drives the scene-color fallback.
+    fingerprint = HashCombine(fingerprint, 0x6e6f4d61744c6e6full); // "noMatLn"
+    fingerprint =
+        HashCombine(fingerprint, static_cast<uint64_t>(node->GetWireColor()));
+    return fingerprint;
+  }
+
+  fingerprint =
+      HashCombine(fingerprint,
+                  static_cast<uint64_t>(reinterpret_cast<uintptr_t>(material)));
+  const std::string stableId = GetOrCreateMaterialGuid(material);
+  for (char c : stableId) {
+    fingerprint = HashCombine(fingerprint, static_cast<uint64_t>(c));
+  }
+
+  const Color diffuse = material->GetDiffuse();
+  fingerprint = HashCombine(fingerprint, HashFloat(diffuse.r));
+  fingerprint = HashCombine(fingerprint, HashFloat(diffuse.g));
+  fingerprint = HashCombine(fingerprint, HashFloat(diffuse.b));
+  const Color specular = material->GetSpecular();
+  fingerprint = HashCombine(fingerprint, HashFloat(specular.r));
+  fingerprint = HashCombine(fingerprint, HashFloat(specular.g));
+  fingerprint = HashCombine(fingerprint, HashFloat(specular.b));
+  const Color emissive = material->GetSelfIllumColor();
+  fingerprint = HashCombine(fingerprint, HashFloat(emissive.r));
+  fingerprint = HashCombine(fingerprint, HashFloat(emissive.g));
+  fingerprint = HashCombine(fingerprint, HashFloat(emissive.b));
+  fingerprint = HashCombine(fingerprint, HashFloat(material->GetXParency()));
+  fingerprint = HashCombine(fingerprint, HashFloat(material->GetShininess()));
+  fingerprint = HashCombine(fingerprint, HashFloat(material->GetShinStr()));
+  fingerprint = HashCombine(fingerprint, HashFloat(material->GetSelfIllum()));
+  fingerprint =
+      HashCombine(fingerprint, material->GetSelfIllumColorOn() ? 1ull : 0ull);
+
+  // Lightweight per-slot map presence so assigning/swapping a texture is
+  // detected without evaluating or baking the maps. For Multi/Sub, GetSubTexmap
+  // returns the sub-materials as Texmaps; fold in their legacy scalars so
+  // editing a color inside a sub-slot also changes the fingerprint.
+  const int subTexmapCount = material->NumSubTexmaps();
+  for (int slotIndex = 0; slotIndex < subTexmapCount; ++slotIndex) {
+    Texmap *texmap = material->GetSubTexmap(slotIndex);
+    if (!texmap) {
+      continue;
+    }
+    const MSTR slotName = material->GetSubTexmapSlotName(slotIndex, FALSE);
+    const std::string slotNameUtf8 = ToUtf8(slotName.data());
+    for (char c : slotNameUtf8) {
+      fingerprint = HashCombine(fingerprint, static_cast<uint64_t>(c));
+    }
+    fingerprint =
+        HashCombine(fingerprint,
+                    static_cast<uint64_t>(reinterpret_cast<uintptr_t>(texmap)));
+    if (Mtl *subMaterial = dynamic_cast<Mtl *>(texmap)) {
+      const Color subDiffuse = subMaterial->GetDiffuse();
+      fingerprint = HashCombine(fingerprint, HashFloat(subDiffuse.r));
+      fingerprint = HashCombine(fingerprint, HashFloat(subDiffuse.g));
+      fingerprint = HashCombine(fingerprint, HashFloat(subDiffuse.b));
+      fingerprint =
+          HashCombine(fingerprint, HashFloat(subMaterial->GetXParency()));
+      fingerprint =
+          HashCombine(fingerprint, HashFloat(subMaterial->GetShininess()));
+      fingerprint =
+          HashCombine(fingerprint, HashFloat(subMaterial->GetShinStr()));
+      fingerprint =
+          HashCombine(fingerprint, HashFloat(subMaterial->GetSelfIllum()));
+    }
+  }
+
+  // Physical Material authored scalars that legacy getters do not surface.
+  const std::string classNameLower = GetObjectClassNameLower(material);
+  if (classNameLower.find("physical") != std::string::npos) {
+    const TimeValue time = ip ? ip->GetTime() : 0;
+    const char *physicalFloatParams[] = {
+        "base_weight", "metalness", "roughness", "reflectivity",
+        "transparency", "coating",   "emission"};
+    for (const char *paramName : physicalFloatParams) {
+      float value = 0.0f;
+      if (TryGetAnimatableParamValueByName(material, time, paramName, &value)) {
+        fingerprint = HashCombine(fingerprint, HashFloat(value));
+      }
+    }
+    Color baseColor(0.0f, 0.0f, 0.0f);
+    if (TryGetAnimatableParamValueByName(material, time, "base_color",
+                                         &baseColor)) {
+      fingerprint = HashCombine(fingerprint, HashFloat(baseColor.r));
+      fingerprint = HashCombine(fingerprint, HashFloat(baseColor.g));
+      fingerprint = HashCombine(fingerprint, HashFloat(baseColor.b));
+    }
+  }
+
+  return fingerprint;
+}
+
 void GatherMaterialSnapshots(
     Interface *ip, const std::unordered_map<ULONG_PTR, NodeSnapshot> &nodeState,
     MaterialStateMap *outState,
@@ -5189,11 +5302,13 @@ void CaptureMeshSnapshot(Interface *ip, INode *node, NodeSnapshot *snapshot) {
   }
 
   Mesh &mesh = *meshAccess.mesh;
-  mesh.checkNormals(TRUE);
-  MeshNormalSpec *specNormals = mesh.GetSpecifiedNormals();
-  if (specNormals && specNormals->GetNumNormals() == 0) {
-    specNormals->BuildNormals();
-  }
+  // NOTE: intentionally read-only on the live mesh. Calling
+  // mesh.checkNormals(TRUE) / specNormals->BuildNormals() here mutates the
+  // actual Max node mesh's MeshNormalSpec; on live-link captures without a
+  // valid RVertex cache that rebuild produces a zero-filled spec marked
+  // normalsBuilt, which turns the object black in the Max viewport. Engine
+  // normals are reconstructed read-only downstream (TryGetSpecifiedCornerNormal
+  // + ComputeSmoothCornerNormalsObjectSpace), so nothing depends on this.
   PopulateSnapshotMeshMetadata(ip, node, mesh, snapshot);
   if (!snapshot->hasMesh) {
     ReleaseNodeMeshAccess(&meshAccess);
@@ -5837,11 +5952,10 @@ bool CaptureNodeMeshPayloadJob(Interface *ip, INode *node,
 
   Mesh &mesh = *meshAccess.mesh;
   job.usedRenderMesh = meshAccess.fromRenderMesh;
-  mesh.checkNormals(TRUE);
-  MeshNormalSpec *specNormals = mesh.GetSpecifiedNormals();
-  if (specNormals && specNormals->GetNumNormals() == 0) {
-    specNormals->BuildNormals();
-  }
+  // NOTE: intentionally read-only on the live mesh. See CaptureMeshSnapshot;
+  // building normals into the live node mesh corrupts the Max viewport
+  // (zero-filled MeshNormalSpec -> black objects). Engine normals are
+  // reconstructed read-only below (smoothing-group-aware corner normals).
   PopulateSnapshotMeshMetadata(ip, node, mesh, &job.snapshot);
   if (!job.snapshot.hasMesh) {
     ReleaseNodeMeshAccess(&meshAccess);
@@ -7379,6 +7493,16 @@ private:
     return kTransformVerificationMinIntervalMs;
   }
 
+  static uint64_t ComputeMaterialVerificationDelayMs(size_t nodeCount) {
+    if (nodeCount >= kHugeSceneNodeThreshold) {
+      return kHugeSceneMaterialVerificationMinIntervalMs;
+    }
+    if (nodeCount >= kLargeSceneNodeThreshold) {
+      return kLargeSceneMaterialVerificationMinIntervalMs;
+    }
+    return kMaterialVerificationMinIntervalMs;
+  }
+
   static INT_PTR CALLBACK RollupDlgProc(HWND hwnd, UINT message, WPARAM wParam,
                                         LPARAM lParam) {
     ProjectRenderLiveLinkUtility *utility =
@@ -7693,6 +7817,11 @@ private:
         ComputeNextPollDeadline(ComputeVerificationDelayMs(m_lastNodeState.size()));
   }
 
+  void ScheduleMaterialVerification_NoLock() {
+    m_nextMaterialVerificationDeadline = ComputeNextPollDeadline(
+        ComputeMaterialVerificationDelayMs(m_lastNodeState.size()));
+  }
+
   std::string BuildDetailsText_NoLock() const {
     const std::string startupSummary =
         m_lastStartupSummary.empty() ? std::string("Last startup: none.")
@@ -7824,7 +7953,14 @@ private:
                    ? 0
                    : (m_meshExportTimingStats.totalSerializeMs /
                       m_meshExportTimingStats.completedCount)) +
-           "ms" + fullResyncDetails;
+           "ms" +
+           "\r\nVerify: matPasses=" +
+           std::to_string(m_materialVerificationPassCount) +
+           " | matRecaps=" +
+           std::to_string(m_materialVerificationRecaptureCount) +
+           " | nodeRemovals=" +
+           std::to_string(m_nodeVerificationRemovalCount) +
+           fullResyncDetails;
   }
 
   void RefreshRollupUI_NoLock() {
@@ -7881,6 +8017,11 @@ private:
     m_nextPollDeadline = Clock::time_point{};
     m_nextCameraPollDeadline = Clock::time_point{};
     m_nextVerificationDeadline = Clock::time_point{};
+    m_nextMaterialVerificationDeadline = Clock::time_point{};
+    m_materialVerificationFingerprints.clear();
+    m_materialVerificationPassCount = 0;
+    m_materialVerificationRecaptureCount = 0;
+    m_nodeVerificationRemovalCount = 0;
     m_nextResumePersistDeadline = Clock::time_point{};
     m_forceFullResync = false;
     m_selectionDirty = false;
@@ -7968,12 +8109,27 @@ private:
                                                        : "full snapshot")) +
                            " (deltas=" + std::to_string(startupDeltaCount) + ")";
 
+    // Seed the material-verification fingerprint cache from the freshly sent
+    // state so the first verification pass starts from a known baseline instead
+    // of re-capturing every material once more.
+    m_materialVerificationFingerprints.clear();
+    for (const auto &[seedHandle, seedSnapshot] : m_lastNodeState) {
+      if (!seedSnapshot.hasMesh) {
+        continue;
+      }
+      if (INode *seedNode = FindNodeByHandle(ip, seedHandle)) {
+        m_materialVerificationFingerprints[seedHandle] =
+            ComputeMaterialCheapFingerprint(ip, seedNode);
+      }
+    }
+
     PersistResumeStateLocked(ip);
     m_resumeStateDirty = false;
     m_nextResumePersistDeadline = Clock::time_point{};
     m_nextPollDeadline = ComputeNextPollDeadline(kActivePollMinIntervalMs);
     m_nextCameraPollDeadline = ComputeNextPollDeadline(kCameraPollMinIntervalMs);
     ScheduleVerificationSweep_NoLock();
+    ScheduleMaterialVerification_NoLock();
     m_forceFullResync = false;
     m_selectionDirty = false;
     m_dirtyNodeHandles.clear();
@@ -8567,12 +8723,17 @@ private:
         !m_forceFullResync &&
         m_nextVerificationDeadline != Clock::time_point{} &&
         now >= m_nextVerificationDeadline;
+    const bool materialVerificationDue =
+        !m_forceFullResync &&
+        m_nextMaterialVerificationDeadline != Clock::time_point{} &&
+        now >= m_nextMaterialVerificationDeadline;
     const bool resumePersistDue =
         m_resumeStateDirty &&
         m_nextResumePersistDeadline != Clock::time_point{} &&
         now >= m_nextResumePersistDeadline;
 
-    if (!m_forceFullResync && !transformVerificationDue && !resumePersistDue &&
+    if (!m_forceFullResync && !transformVerificationDue &&
+        !materialVerificationDue && !resumePersistDue &&
         m_nextPollDeadline != Clock::time_point{} &&
         now < m_nextPollDeadline) {
       return;
@@ -8589,7 +8750,8 @@ private:
     }
 
     const bool hasDirtyWorkPending =
-        m_forceFullResync || transformVerificationDue || m_selectionDirty ||
+        m_forceFullResync || transformVerificationDue ||
+        materialVerificationDue || m_selectionDirty ||
         !m_dirtyNodeHandles.empty() || !m_dirtyMeshHandles.empty() ||
         !m_dirtyMaterialHandles.empty() || !m_dirtyLightHandles.empty();
     if (resumePersistDue && !hasDirtyWorkPending) {
@@ -8804,6 +8966,22 @@ private:
           std::chrono::duration_cast<std::chrono::milliseconds>(
               Clock::now() - materialGatherStart)
               .count());
+      // Seed the material-verification fingerprint cache from the freshly
+      // captured state so the first verification pass starts from a known
+      // baseline instead of re-capturing every material once more.
+      m_materialVerificationFingerprints.clear();
+      for (const auto &[verifyHandle, verifySnapshot] : currentState) {
+        if (!verifySnapshot.hasMesh) {
+          continue;
+        }
+        const auto verifyNodeIt = nodeLookup.find(verifyHandle);
+        INode *verifyNode =
+            verifyNodeIt != nodeLookup.end() ? verifyNodeIt->second : nullptr;
+        if (verifyNode) {
+          m_materialVerificationFingerprints[verifyHandle] =
+              ComputeMaterialCheapFingerprint(ip, verifyNode);
+        }
+      }
       scannedNodeCount = currentState.size();
       fullResyncTiming.nodeCount = currentState.size();
       fullResyncTiming.lightCount = currentLightState.size();
@@ -8990,6 +9168,7 @@ private:
         CaptureActiveCameraSnapshot(ip, &m_lastCameraSnapshot);
         MarkResumeStateDirty_NoLock();
         ScheduleVerificationSweep_NoLock();
+        ScheduleMaterialVerification_NoLock();
         ClearDirtyState();
       } else if (deltas.empty()) {
         m_lastNodeState = std::move(currentState);
@@ -9000,6 +9179,7 @@ private:
         CaptureActiveCameraSnapshot(ip, &m_lastCameraSnapshot);
         MarkResumeStateDirty_NoLock();
         ScheduleVerificationSweep_NoLock();
+        ScheduleMaterialVerification_NoLock();
         ClearDirtyState();
       }
 
@@ -9150,7 +9330,12 @@ private:
     if (transformVerificationDue) {
       // INodeEventCallback can miss transform updates during interactive
       // manipulations, IK evaluation, or playback, so verify transforms on a
-      // slower cadence instead of every poll.
+      // slower cadence instead of every poll. The same scene walk also
+      // verifies node presence: nodes that no longer exist in the live scene
+      // (e.g. boolean operands removed through the boolean UI, or any delete
+      // whose notification was missed) are reconciled with a NodeRemoved delta
+      // so they never stay stuck in the engine.
+      std::unordered_set<ULONG_PTR> liveNodeHandles;
       if (INode *root = ip->GetRootNode()) {
         std::vector<INode *> traversalStack;
         for (int i = 0; i < root->NumberOfChildren(); ++i) {
@@ -9161,6 +9346,7 @@ private:
           traversalStack.pop_back();
           if (node) {
             ULONG_PTR handle = node->GetHandle();
+            liveNodeHandles.insert(handle);
             if (stagedNodes.find(handle) == stagedNodes.end()) {
               auto it = m_lastNodeState.find(handle);
               if (it != m_lastNodeState.end()) {
@@ -9181,7 +9367,79 @@ private:
           }
         }
       }
+      // Node presence reconciliation: anything still tracked but no longer in
+      // the scene is a missed removal. Emit NodeRemoved and clean up its
+      // payload, material references, lights, and cameras.
+      for (auto it = m_lastNodeState.begin(); it != m_lastNodeState.end();) {
+        const ULONG_PTR handle = it->first;
+        const bool stillLive =
+            liveNodeHandles.find(handle) != liveNodeHandles.end();
+        const bool handledThisPass =
+            stagedNodes.find(handle) != stagedNodes.end() ||
+            m_pendingMeshExports.find(handle) != m_pendingMeshExports.end();
+        if (stillLive || handledThisPass) {
+          ++it;
+          continue;
+        }
+        const NodeSnapshot staleSnapshot = it->second;
+        it = m_lastNodeState.erase(it);
+        CancelQueuedMeshPayloadExport_NoLock(handle);
+        QueuePayloadRemoval_NoLock(staleSnapshot.objectId);
+        AppendNodeRemovedDelta(m_documentId, staleSnapshot, &m_nextRevision,
+                               &deltas);
+        appendTrackedMaterialRemovals(handle, nullptr);
+        stageMaterialState(handle, MaterialStateMap{});
+        appendTrackedLightRemoval(handle);
+        appendTrackedSceneCameraRemoval(handle);
+        ++m_nodeVerificationRemovalCount;
+      }
       ScheduleVerificationSweep_NoLock();
+    }
+
+    if (materialVerificationDue) {
+      // Material verification: the scene event system can miss material edits
+      // (especially on shared/instanced materials edited through the Material
+      // Editor). Re-read a cheap material fingerprint on a slow cadence and
+      // fully re-capture + diff only the materials that actually changed, so
+      // instance material edits always reach the engine. Texture baking only
+      // happens for materials whose cheap fingerprint changed, never on a
+      // timer.
+      ++m_materialVerificationPassCount;
+      std::unordered_map<ULONG_PTR, uint64_t> currentFingerprints;
+      currentFingerprints.reserve(m_lastNodeState.size());
+      for (const auto &[handle, snapshot] : m_lastNodeState) {
+        if (!snapshot.hasMesh) {
+          continue;
+        }
+        INode *node = FindNodeByHandle(ip, handle);
+        if (!node) {
+          continue;
+        }
+        const uint64_t fingerprint = ComputeMaterialCheapFingerprint(ip, node);
+        currentFingerprints[handle] = fingerprint;
+        if (stagedMaterialHandles.find(handle) != stagedMaterialHandles.end()) {
+          // The live event path already staged this node's material this poll;
+          // re-diffing here would only duplicate the delta.
+          continue;
+        }
+        const auto cachedIt = m_materialVerificationFingerprints.find(handle);
+        if (cachedIt != m_materialVerificationFingerprints.end() &&
+            cachedIt->second == fingerprint) {
+          continue;
+        }
+        // Cheap signature changed (or first verification): do a full capture
+        // and diff so genuine changes produce a MaterialChanged delta.
+        std::unordered_map<ULONG_PTR, NodeSnapshot> nodeState;
+        nodeState.emplace(handle, snapshot);
+        MaterialStateMap materialStateForNode;
+        GatherMaterialSnapshots(ip, nodeState, &materialStateForNode);
+        appendMaterialStateDiff(materialStateForNode);
+        appendTrackedMaterialRemovals(handle, &materialStateForNode);
+        stageMaterialState(handle, std::move(materialStateForNode));
+        ++m_materialVerificationRecaptureCount;
+      }
+      m_materialVerificationFingerprints = std::move(currentFingerprints);
+      ScheduleMaterialVerification_NoLock();
     }
 
     if (m_selectionDirty) {
@@ -9307,6 +9565,7 @@ private:
   Clock::time_point m_nextPollDeadline = Clock::time_point{};
   Clock::time_point m_nextCameraPollDeadline = Clock::time_point{};
   Clock::time_point m_nextVerificationDeadline = Clock::time_point{};
+  Clock::time_point m_nextMaterialVerificationDeadline = Clock::time_point{};
   Clock::time_point m_sceneOperationSettleDeadline = Clock::time_point{};
   Clock::time_point m_nextResumePersistDeadline = Clock::time_point{};
   ISceneEventManager *m_sceneEventManager = nullptr;
@@ -9337,6 +9596,10 @@ private:
   MaterialStateMap m_lastMaterialState;
   std::unordered_map<ULONG_PTR, LightSnapshot> m_lastLightState;
   std::unordered_map<ULONG_PTR, CameraSnapshot> m_lastSceneCameraState;
+  std::unordered_map<ULONG_PTR, uint64_t> m_materialVerificationFingerprints;
+  uint64_t m_materialVerificationPassCount = 0;
+  uint64_t m_materialVerificationRecaptureCount = 0;
+  uint64_t m_nodeVerificationRemovalCount = 0;
   std::vector<std::string> m_lastSelectedObjectIds;
   CameraSnapshot m_lastCameraSnapshot;
   bool m_forceFullSnapshotOnConnect = false;
