@@ -865,10 +865,6 @@ std::string GetOrCreateSceneGuid(Interface *ip) {
          (rawGuid.empty() ? std::to_string(root->GetHandle()) : rawGuid);
 }
 
-void GatherNodeGuidUsage(INode *node,
-                         std::unordered_map<std::string, size_t> *usageCounts) {
-}
-
 void EnsureUniqueNodeGuid(INode *node, std::unordered_set<std::string> *seenGuids) {
   if (!node || !seenGuids) {
     return;
@@ -1766,57 +1762,6 @@ Point3 CrossPoint3(const Point3 &lhs, const Point3 &rhs) {
                 lhs.x * rhs.y - lhs.y * rhs.x);
 }
 
-Point3 GetFaceCornerNormal(Mesh &mesh, int faceIndex, int corner) {
-  MeshNormalSpec *specifiedNormals = mesh.GetSpecifiedNormals();
-  if (specifiedNormals && specifiedNormals->GetNumFaces() == mesh.getNumFaces() &&
-      specifiedNormals->GetNumNormals() > 0) {
-    // A MeshNormalSpec can report normals while storing zero-length vectors
-    // (seen on render-mesh / live-link captures). Trusting GetNormal() blindly
-    // then yields a zero normal that collapses to the (0,1,0) write fallback,
-    // making every shading normal point straight up. Only accept a non-zero
-    // specified normal; otherwise fall through to the smoothing-group / face
-    // normal logic below.
-    const Point3 specNormal = specifiedNormals->GetNormal(faceIndex, corner);
-    if (specNormal.x * specNormal.x + specNormal.y * specNormal.y +
-            specNormal.z * specNormal.z >
-        1.0e-12f) {
-      return specNormal;
-    }
-  }
-
-  const Face &face = mesh.faces[faceIndex];
-  if (face.smGroup == 0) {
-    return mesh.getFaceNormal(faceIndex);
-  }
-
-  RVertex *renderVertex = mesh.getRVertPtr(face.getVert(corner));
-  if (!renderVertex) {
-    return mesh.getFaceNormal(faceIndex);
-  }
-
-  if ((renderVertex->rFlags & SPECIFIED_NORMAL) != 0) {
-    return renderVertex->rn.getNormal();
-  }
-
-  const DWORD normalCount = renderVertex->rFlags & NORCT_MASK;
-  if (normalCount == 0) {
-    return mesh.getFaceNormal(faceIndex);
-  }
-
-  if (normalCount == 1) {
-    return renderVertex->rn.getNormal();
-  }
-
-  for (DWORD normalIndex = 0; normalIndex < normalCount; ++normalIndex) {
-    RNormal &renderNormal = renderVertex->ern[normalIndex];
-    if ((renderNormal.getSmGroup() & face.smGroup) != 0) {
-      return renderNormal.getNormal();
-    }
-  }
-
-  return mesh.getFaceNormal(faceIndex);
-}
-
 // Returns an explicit, non-zero specified normal for a face corner, or false.
 // This is only the artist-authored / valid MeshNormalSpec path -- it does NOT
 // fall back to face normals, so callers can decide their own smooth fallback.
@@ -1894,15 +1839,6 @@ std::vector<std::array<Point3, 3>> ComputeSmoothCornerNormalsObjectSpace(
     }
   }
   return result;
-}
-
-Point3 BuildStableCameraUp(const Point3 &forward) {
-  const Point3 worldUp(0.0f, 1.0f, 0.0f);
-  Point3 right = CrossPoint3(worldUp, forward);
-  NormalizePoint3(&right, Point3(1.0f, 0.0f, 0.0f));
-  Point3 up = CrossPoint3(forward, right);
-  NormalizePoint3(&up, worldUp);
-  return up;
 }
 
 bool SameVector3(const std::array<float, 3> &lhs, const std::array<float, 3> &rhs) {
@@ -5422,7 +5358,7 @@ bool PublishTemporaryPayloadFile(const std::filesystem::path &temporaryPath,
   return !error;
 }
 
-std::string BuildSharedPayloadBaseKey(Interface *ip, INode *node) {
+std::string BuildSharedPayloadBaseKey(INode *node) {
   if (!node) return {};
   Object* baseObj = node->GetObjectRef();
   if (!baseObj) return {};
@@ -5947,8 +5883,7 @@ bool CaptureNodeMeshPayloadJob(Interface *ip, INode *node,
   CapturedMeshPayloadJob job;
   job.snapshot = snapshot;
   job.documentId = documentId;
-  const std::string sharedPayloadBaseKey =
-      BuildSharedPayloadBaseKey(ip, node);
+  const std::string sharedPayloadBaseKey = BuildSharedPayloadBaseKey(node);
 
   Mesh &mesh = *meshAccess.mesh;
   job.usedRenderMesh = meshAccess.fromRenderMesh;
@@ -6571,28 +6506,6 @@ void AppendMeshPayloadDelta(const std::string &documentId,
                                               {"topologyChanged", true},
                                               {"payloadUri", payloadUri},
                                               {"payloadHash", std::to_string(snapshot.geometryFingerprint)}}}});
-}
-
-void AppendMeshPayloadDeltaIfAvailable(Interface *ip,
-                                       const std::string &documentId,
-                                       const NodeSnapshot &snapshot,
-                                       uint64_t *revision, json *outDeltas) {
-  if (!snapshot.hasMesh || !ip) {
-    return;
-  }
-
-  INode *node = FindNodeByHandle(ip, snapshot.handle);
-  if (!node) {
-    return;
-  }
-
-  std::string payloadUri;
-  if (!ExportNodeAsNativeMeshPayload(ip, node, documentId, snapshot,
-                                     &payloadUri)) {
-    return;
-  }
-
-  AppendMeshPayloadDelta(documentId, snapshot, payloadUri, revision, outDeltas);
 }
 
 bool CaptureActiveCameraSnapshot(Interface *ip, CameraSnapshot *outSnapshot) {
@@ -9374,9 +9287,20 @@ private:
         const ULONG_PTR handle = it->first;
         const bool stillLive =
             liveNodeHandles.find(handle) != liveNodeHandles.end();
+        const bool hasInFlightExport = std::any_of(
+            m_inFlightMeshExports.begin(), m_inFlightMeshExports.end(),
+            [handle](const InFlightMeshPayloadExport &exportJob) {
+              return exportJob.handle == handle;
+            });
+        const bool hasCompletedExport = std::any_of(
+            m_completedMeshExports.begin(), m_completedMeshExports.end(),
+            [handle](const AsyncMeshPayloadResult &result) {
+              return result.handle == handle;
+            });
         const bool handledThisPass =
             stagedNodes.find(handle) != stagedNodes.end() ||
-            m_pendingMeshExports.find(handle) != m_pendingMeshExports.end();
+            m_pendingMeshExports.find(handle) != m_pendingMeshExports.end() ||
+            hasInFlightExport || hasCompletedExport;
         if (stillLive || handledThisPass) {
           ++it;
           continue;
