@@ -4694,20 +4694,19 @@ uint64_t ComputeMaterialCheapFingerprint(Interface *ip, INode *node) {
       HashCombine(fingerprint, material->GetSelfIllumColorOn() ? 1ull : 0ull);
 
   // Lightweight per-slot map presence so assigning/swapping a texture is
-  // detected without evaluating or baking the maps. For Multi/Sub, GetSubTexmap
-  // returns the sub-materials as Texmaps; fold in their legacy scalars so
-  // editing a color inside a sub-slot also changes the fingerprint.
+  // detected without evaluating or baking the maps. Slot indices are stable per
+  // material class, so hashing (slotIndex, texmap pointer) is just as
+  // discriminating as slot names but avoids a wide-char conversion per slot on
+  // every verification pass. For Multi/Sub, GetSubTexmap returns the
+  // sub-materials as Texmaps; fold in their legacy scalars so editing a color
+  // inside a sub-slot also changes the fingerprint.
   const int subTexmapCount = material->NumSubTexmaps();
   for (int slotIndex = 0; slotIndex < subTexmapCount; ++slotIndex) {
     Texmap *texmap = material->GetSubTexmap(slotIndex);
     if (!texmap) {
       continue;
     }
-    const MSTR slotName = material->GetSubTexmapSlotName(slotIndex, FALSE);
-    const std::string slotNameUtf8 = ToUtf8(slotName.data());
-    for (char c : slotNameUtf8) {
-      fingerprint = HashCombine(fingerprint, static_cast<uint64_t>(c));
-    }
+    fingerprint = HashCombine(fingerprint, static_cast<uint64_t>(slotIndex));
     fingerprint =
         HashCombine(fingerprint,
                     static_cast<uint64_t>(reinterpret_cast<uintptr_t>(texmap)));
@@ -9285,8 +9284,14 @@ private:
       // payload, material references, lights, and cameras.
       for (auto it = m_lastNodeState.begin(); it != m_lastNodeState.end();) {
         const ULONG_PTR handle = it->first;
-        const bool stillLive =
-            liveNodeHandles.find(handle) != liveNodeHandles.end();
+        if (liveNodeHandles.find(handle) != liveNodeHandles.end() ||
+            stagedNodes.find(handle) != stagedNodes.end() ||
+            m_pendingMeshExports.find(handle) != m_pendingMeshExports.end()) {
+          ++it;
+          continue;
+        }
+        // Only potential stale nodes reach the export-list scan (these lists
+        // are small, but scanning them for every live node is wasted work).
         const bool hasInFlightExport = std::any_of(
             m_inFlightMeshExports.begin(), m_inFlightMeshExports.end(),
             [handle](const InFlightMeshPayloadExport &exportJob) {
@@ -9297,11 +9302,7 @@ private:
             [handle](const AsyncMeshPayloadResult &result) {
               return result.handle == handle;
             });
-        const bool handledThisPass =
-            stagedNodes.find(handle) != stagedNodes.end() ||
-            m_pendingMeshExports.find(handle) != m_pendingMeshExports.end() ||
-            hasInFlightExport || hasCompletedExport;
-        if (stillLive || handledThisPass) {
+        if (hasInFlightExport || hasCompletedExport) {
           ++it;
           continue;
         }
