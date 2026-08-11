@@ -98,14 +98,13 @@ const std::string &MaxLiveLinkPipeClient::GetLastError() const {
   return m_lastError;
 }
 
-bool MaxLiveLinkPipeClient::SendJsonLine(const std::string &line) {
+bool MaxLiveLinkPipeClient::SendJsonLine(std::string line) {
   if (!m_pipe) {
     m_lastError = "Pipe is not connected";
     return false;
   }
 
-  std::string payload = line;
-  payload.push_back('\n');
+  line.push_back('\n');
 
   HANDLE pipe = static_cast<HANDLE>(m_pipe);
   HANDLE eventHandle = static_cast<HANDLE>(m_writeEvent);
@@ -119,7 +118,7 @@ bool MaxLiveLinkPipeClient::SendJsonLine(const std::string &line) {
   OVERLAPPED overlapped = {};
   overlapped.hEvent = eventHandle;
   DWORD bytesWritten = 0;
-  if (!WriteFile(pipe, payload.data(), static_cast<DWORD>(payload.size()),
+  if (!WriteFile(pipe, line.data(), static_cast<DWORD>(line.size()),
                  &bytesWritten, &overlapped)) {
     const DWORD writeError = ::GetLastError();
     if (writeError != ERROR_IO_PENDING) {
@@ -148,7 +147,7 @@ bool MaxLiveLinkPipeClient::SendJsonLine(const std::string &line) {
     }
   }
 
-  if (bytesWritten != payload.size()) {
+  if (bytesWritten != line.size()) {
     m_lastError = "Named pipe write was truncated";
     Disconnect();
     return false;

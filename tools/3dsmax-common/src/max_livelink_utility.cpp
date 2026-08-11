@@ -1794,23 +1794,55 @@ std::vector<std::array<Point3, 3>> ComputeSmoothCornerNormalsObjectSpace(
   const int numFaces = mesh.getNumFaces();
   const int numVerts = mesh.getNumVerts();
   std::vector<std::array<Point3, 3>> result(
-      static_cast<size_t>(std::max(numFaces, 0)));
+      static_cast<size_t>((std::max)(numFaces, 0)));
+  if (numFaces <= 0 || numVerts <= 0) {
+    return result;
+  }
 
-  std::vector<Point3> faceNormals(static_cast<size_t>(std::max(numFaces, 0)));
+  std::vector<Point3> faceNormals(static_cast<size_t>(numFaces));
   for (int f = 0; f < numFaces; ++f) {
     const Face &face = mesh.faces[f];
     const Point3 &a = mesh.verts[face.getVert(0)];
     const Point3 &b = mesh.verts[face.getVert(1)];
     const Point3 &c = mesh.verts[face.getVert(2)];
-    faceNormals[f] = CrossPoint3(b - a, c - a); // length == 2*area (weighting)
+    faceNormals[static_cast<size_t>(f)] =
+        CrossPoint3(b - a, c - a); // length == 2*area (weighting)
   }
 
-  std::vector<std::vector<int>> vertexFaces(
-      static_cast<size_t>(std::max(numVerts, 0)));
+  // CSR adjacency (counts -> offsets -> face ids) avoids per-vertex
+  // vector reallocations on large meshes.
+  std::vector<int> vertexFaceCounts(static_cast<size_t>(numVerts), 0);
   for (int f = 0; f < numFaces; ++f) {
     const Face &face = mesh.faces[f];
     for (int corner = 0; corner < 3; ++corner) {
-      vertexFaces[face.getVert(corner)].push_back(f);
+      const int vertexIndex = face.getVert(corner);
+      if (vertexIndex >= 0 && vertexIndex < numVerts) {
+        ++vertexFaceCounts[static_cast<size_t>(vertexIndex)];
+      }
+    }
+  }
+
+  std::vector<int> vertexFaceOffsets(static_cast<size_t>(numVerts) + 1, 0);
+  for (int v = 0; v < numVerts; ++v) {
+    vertexFaceOffsets[static_cast<size_t>(v) + 1] =
+        vertexFaceOffsets[static_cast<size_t>(v)] +
+        vertexFaceCounts[static_cast<size_t>(v)];
+  }
+  std::vector<int> vertexFaces(
+      static_cast<size_t>(vertexFaceOffsets[static_cast<size_t>(numVerts)]));
+  std::fill(vertexFaceCounts.begin(), vertexFaceCounts.end(), 0);
+  for (int f = 0; f < numFaces; ++f) {
+    const Face &face = mesh.faces[f];
+    for (int corner = 0; corner < 3; ++corner) {
+      const int vertexIndex = face.getVert(corner);
+      if (vertexIndex < 0 || vertexIndex >= numVerts) {
+        continue;
+      }
+      const size_t slot =
+          static_cast<size_t>(vertexFaceOffsets[static_cast<size_t>(vertexIndex)] +
+                              vertexFaceCounts[static_cast<size_t>(vertexIndex)]);
+      vertexFaces[slot] = f;
+      ++vertexFaceCounts[static_cast<size_t>(vertexIndex)];
     }
   }
 
@@ -1820,22 +1852,28 @@ std::vector<std::array<Point3, 3>> ComputeSmoothCornerNormalsObjectSpace(
     for (int corner = 0; corner < 3; ++corner) {
       Point3 accumulated(0.0f, 0.0f, 0.0f);
       if (smGroup == 0) {
-        accumulated = faceNormals[f];
+        accumulated = faceNormals[static_cast<size_t>(f)];
       } else {
         const int vertexIndex = face.getVert(corner);
-        for (int neighborFace : vertexFaces[vertexIndex]) {
-          if ((mesh.faces[neighborFace].smGroup & smGroup) != 0) {
-            accumulated += faceNormals[neighborFace];
+        if (vertexIndex >= 0 && vertexIndex < numVerts) {
+          const int begin = vertexFaceOffsets[static_cast<size_t>(vertexIndex)];
+          const int end =
+              vertexFaceOffsets[static_cast<size_t>(vertexIndex) + 1];
+          for (int neighborSlot = begin; neighborSlot < end; ++neighborSlot) {
+            const int neighborFace = vertexFaces[static_cast<size_t>(neighborSlot)];
+            if ((mesh.faces[neighborFace].smGroup & smGroup) != 0) {
+              accumulated += faceNormals[static_cast<size_t>(neighborFace)];
+            }
           }
         }
         if (accumulated.x * accumulated.x + accumulated.y * accumulated.y +
                 accumulated.z * accumulated.z <=
             1.0e-12f) {
-          accumulated = faceNormals[f];
+          accumulated = faceNormals[static_cast<size_t>(f)];
         }
       }
       NormalizePoint3(&accumulated, Point3(0.0f, 1.0f, 0.0f));
-      result[f][corner] = accumulated;
+      result[static_cast<size_t>(f)][static_cast<size_t>(corner)] = accumulated;
     }
   }
   return result;
@@ -3855,6 +3893,42 @@ INode *FindNodeByHandle(Interface *ip, ULONG_PTR handle) {
     }
   }
   return nullptr;
+}
+
+// Single scene walk producing handle -> INode* for batch work (material
+// verification, mesh dispatch). Avoids O(nodes) FindNodeByHandle per item.
+void BuildSceneNodeHandleLookup(
+    Interface *ip, std::unordered_map<ULONG_PTR, INode *> *outLookup) {
+  if (!ip || !outLookup) {
+    return;
+  }
+  outLookup->clear();
+  INode *root = ip->GetRootNode();
+  if (!root) {
+    return;
+  }
+
+  std::vector<INode *> stack;
+  stack.reserve(64);
+  for (int childIndex = 0; childIndex < root->NumberOfChildren(); ++childIndex) {
+    if (INode *child = root->GetChildNode(childIndex)) {
+      stack.push_back(child);
+    }
+  }
+  while (!stack.empty()) {
+    INode *node = stack.back();
+    stack.pop_back();
+    if (!node) {
+      continue;
+    }
+    outLookup->emplace(node->GetHandle(), node);
+    for (int childIndex = 0; childIndex < node->NumberOfChildren();
+         ++childIndex) {
+      if (INode *child = node->GetChildNode(childIndex)) {
+        stack.push_back(child);
+      }
+    }
+  }
 }
 
 std::array<float, 4> ColorToArray4(const Color &color, float alpha) {
@@ -6113,6 +6187,35 @@ AsyncMeshPayloadResult SerializeCapturedMeshPayload(
   };
   std::vector<ExportSubmesh> submeshes;
   std::unordered_map<int, size_t> submeshBySlot;
+  // Weld identical (position, normal, uv) corners within a submesh. Without
+  // this every triangle writes 3 unique verts, inflating .prmesh size and
+  // engine load ~3x for smooth meshes.
+  struct WeldedVertexKey {
+    std::array<uint32_t, 8> bits{};
+
+    bool operator==(const WeldedVertexKey &) const = default;
+  };
+  struct WeldedVertexKeyHasher {
+    size_t operator()(const WeldedVertexKey &key) const noexcept {
+      size_t hash = 1469598103934665603ull;
+      for (uint32_t value : key.bits) {
+        hash ^= static_cast<size_t>(value);
+        hash *= 1099511628211ull;
+      }
+      return hash;
+    }
+  };
+  auto makeWeldedVertexKey = [](const NativeMeshPayloadVertex &vertex) {
+    WeldedVertexKey key;
+    std::memcpy(&key.bits[0], vertex.position, sizeof(vertex.position));
+    std::memcpy(&key.bits[3], vertex.normal, sizeof(vertex.normal));
+    std::memcpy(&key.bits[6], vertex.uv, sizeof(vertex.uv));
+    return key;
+  };
+  std::unordered_map<int, std::unordered_map<WeldedVertexKey, uint32_t,
+                                             WeldedVertexKeyHasher>>
+      weldMapsBySlot;
+
   for (const CapturedMeshFace &face : job.faces) {
     const int materialSlot = face.materialSlot;
 
@@ -6124,6 +6227,7 @@ AsyncMeshPayloadResult SerializeCapturedMeshPayload(
       submeshes.push_back(std::move(submesh));
     }
     ExportSubmesh &submesh = submeshes[submeshIt->second];
+    auto &weldMap = weldMapsBySlot[materialSlot];
 
     const Point3 positions[3] = {
       ConvertMaxPointToEngine(
@@ -6136,10 +6240,8 @@ AsyncMeshPayloadResult SerializeCapturedMeshPayload(
         TransformPointByMatrix3(job.objectToNode,
                                 job.positions[face.vertexIndices[2]])),
     };
-    const int vertexOrder[3] = {0, 1, 2};
-    for (int corner = 0; corner < 3; ++corner) {
-      NativeMeshPayloadVertex vertex;
-      const int sourceCorner = vertexOrder[corner];
+    for (int sourceCorner = 0; sourceCorner < 3; ++sourceCorner) {
+      NativeMeshPayloadVertex vertex{};
       const Point3 &position = positions[sourceCorner];
       Point3 normal = ConvertMaxVectorToEngine(
         TransformVectorByMatrix3(
@@ -6157,8 +6259,14 @@ AsyncMeshPayloadResult SerializeCapturedMeshPayload(
         vertex.uv[0] = uv.x;
         vertex.uv[1] = 1.0f - uv.y;
       }
-      submesh.indices.push_back(static_cast<uint32_t>(submesh.vertices.size()));
-      submesh.vertices.push_back(vertex);
+
+      const WeldedVertexKey weldKey = makeWeldedVertexKey(vertex);
+      const auto [weldIt, weldInserted] =
+          weldMap.emplace(weldKey, static_cast<uint32_t>(submesh.vertices.size()));
+      if (weldInserted) {
+        submesh.vertices.push_back(vertex);
+      }
+      submesh.indices.push_back(weldIt->second);
     }
   }
 
@@ -6869,19 +6977,20 @@ bool SendBatch(const std::string &sessionId, uint64_t sequence, bool fullSync,
   batch["sequence"] = sequence;
   batch["fullSync"] = fullSync;
   batch["deltas"] = deltas;
-  const std::string payload = batch.dump();
-  if (g_pipeClient.SendJsonLine(payload)) {
+  std::string payload = batch.dump();
+  if (g_pipeClient.SendJsonLine(std::move(payload))) {
     return true;
   }
 
   // Max can keep a stale write handle when the engine process exits and
   // reopens. Reconnect once and retry the batch so a fresh startup/resync
-  // works on the first button press.
+  // works on the first button press. Re-dump only on the rare reconnect path.
   g_pipeClient.Disconnect();
   if (!EnsurePipeConnected()) {
     return false;
   }
-  return g_pipeClient.SendJsonLine(payload);
+  payload = batch.dump();
+  return g_pipeClient.SendJsonLine(std::move(payload));
 }
 
 bool SendInitialSnapshot(Interface *ip,
@@ -7592,6 +7701,9 @@ private:
     }
     if (deadline > m_nextVerificationDeadline) {
       m_nextVerificationDeadline = deadline;
+    }
+    if (deadline > m_nextMaterialVerificationDeadline) {
+      m_nextMaterialVerificationDeadline = deadline;
     }
     if (deadline > m_sceneOperationSettleDeadline) {
       m_sceneOperationSettleDeadline = deadline;
@@ -8397,6 +8509,14 @@ private:
     size_t dispatchCount = 0;
     const size_t maxDispatchCount =
         force ? m_pendingMeshExports.size() : MaxQueuedCapturedMeshJobs();
+
+    // One scene walk covers all pending lookups instead of O(pending * nodes)
+    // recursive FindNodeByHandle calls.
+    std::unordered_map<ULONG_PTR, INode *> nodeLookup;
+    if (!m_pendingMeshExports.empty()) {
+      BuildSceneNodeHandleLookup(ip, &nodeLookup);
+    }
+
     auto it = m_pendingMeshExports.begin();
     while (it != m_pendingMeshExports.end()) {
       if (!force && m_inFlightMeshExports.size() >= MaxQueuedCapturedMeshJobs()) {
@@ -8406,11 +8526,55 @@ private:
         break;
       }
       const NodeSnapshot snapshot = it->second;
-      INode *node = FindNodeByHandle(ip, snapshot.handle);
+      INode *node = nullptr;
+      const auto nodeIt = nodeLookup.find(snapshot.handle);
+      if (nodeIt != nodeLookup.end()) {
+        node = nodeIt->second;
+      } else {
+        node = FindNodeByHandle(ip, snapshot.handle);
+      }
       if (!node) {
         RecordMeshCaptureFailure_NoLock(snapshot.handle);
         it = m_pendingMeshExports.erase(it);
         continue;
+      }
+
+      // Fast path for instanced geometry: reuse an already-exported shared
+      // payload without paying for another mesh capture. Shared keys are only
+      // valid when the node has an assigned material (scene-color materials
+      // are node-private and must not share .prmesh files).
+      std::string earlySharedKey;
+      if (node->GetMtl() != nullptr && snapshot.geometryFingerprint != 0) {
+        earlySharedKey = BuildSharedPayloadKey(
+            BuildSharedPayloadBaseKey(node), snapshot.geometryFingerprint);
+      }
+      if (!earlySharedKey.empty()) {
+        const auto earlyCacheIt = m_sharedPayloadCache.find(earlySharedKey);
+        if (earlyCacheIt != m_sharedPayloadCache.end() &&
+            !earlyCacheIt->second.payloadUri.empty() &&
+            earlyCacheIt->second.geometryFingerprint ==
+                snapshot.geometryFingerprint) {
+          NodeSnapshot cachedSnapshot = snapshot;
+          if (earlyCacheIt->second.vertexCount > 0) {
+            cachedSnapshot.vertexCount = earlyCacheIt->second.vertexCount;
+            cachedSnapshot.indexCount = earlyCacheIt->second.indexCount;
+          }
+          AppendMeshPayloadDelta(m_documentId, cachedSnapshot,
+                                 earlyCacheIt->second.payloadUri,
+                                 &m_nextRevision, &cachedDeltas);
+          cachedReadySnapshots.emplace_back(snapshot.handle,
+                                            std::move(cachedSnapshot));
+          ++it;
+          ++dispatchCount;
+          continue;
+        }
+        if (m_inFlightSharedPayloads.find(earlySharedKey) !=
+            m_inFlightSharedPayloads.end()) {
+          // Another instance is already serializing this shared payload;
+          // leave this node queued and skip the expensive capture for now.
+          ++it;
+          continue;
+        }
       }
 
       CapturedMeshPayloadJob job;
@@ -8426,7 +8590,9 @@ private:
       const auto cacheIt = m_sharedPayloadCache.find(job.sharedPayloadKey);
       if (!job.sharedPayloadKey.empty() &&
           cacheIt != m_sharedPayloadCache.end() &&
-          !cacheIt->second.payloadUri.empty()) {
+          !cacheIt->second.payloadUri.empty() &&
+          cacheIt->second.geometryFingerprint ==
+              job.snapshot.geometryFingerprint) {
         AppendMeshPayloadDelta(m_documentId, job.snapshot,
                                cacheIt->second.payloadUri, &m_nextRevision,
                                &cachedDeltas);
@@ -9330,13 +9496,19 @@ private:
       // happens for materials whose cheap fingerprint changed, never on a
       // timer.
       ++m_materialVerificationPassCount;
+      std::unordered_map<ULONG_PTR, INode *> materialNodeLookup;
+      BuildSceneNodeHandleLookup(ip, &materialNodeLookup);
       std::unordered_map<ULONG_PTR, uint64_t> currentFingerprints;
       currentFingerprints.reserve(m_lastNodeState.size());
       for (const auto &[handle, snapshot] : m_lastNodeState) {
         if (!snapshot.hasMesh) {
           continue;
         }
-        INode *node = FindNodeByHandle(ip, handle);
+        INode *node = nullptr;
+        const auto nodeIt = materialNodeLookup.find(handle);
+        if (nodeIt != materialNodeLookup.end()) {
+          node = nodeIt->second;
+        }
         if (!node) {
           continue;
         }
@@ -9357,7 +9529,8 @@ private:
         std::unordered_map<ULONG_PTR, NodeSnapshot> nodeState;
         nodeState.emplace(handle, snapshot);
         MaterialStateMap materialStateForNode;
-        GatherMaterialSnapshots(ip, nodeState, &materialStateForNode);
+        GatherMaterialSnapshots(ip, nodeState, &materialStateForNode,
+                                &materialNodeLookup);
         appendMaterialStateDiff(materialStateForNode);
         appendTrackedMaterialRemovals(handle, &materialStateForNode);
         stageMaterialState(handle, std::move(materialStateForNode));

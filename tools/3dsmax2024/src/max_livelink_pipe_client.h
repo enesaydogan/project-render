@@ -13,7 +13,9 @@ public:
   bool IsConnected() const;
   const std::string &GetLastError() const;
 
-  bool SendJsonLine(const std::string &line);
+  // Takes ownership so callers can move a dump() result without a second copy
+  // before the trailing newline is appended.
+  bool SendJsonLine(std::string line);
 
 private:
   void *m_pipe = nullptr;
