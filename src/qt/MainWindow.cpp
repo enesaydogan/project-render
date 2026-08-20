@@ -1539,6 +1539,10 @@ void MainWindow::createToolBar()
     debugViewCombo->addItem(tr("Tangent-Space Normal"), 27);
     debugViewCombo->addItem(tr("Geometric Normal"), 28);
     debugViewCombo->addItem(tr("Normal Tex Raw RGB"), 29);
+    debugViewCombo->insertSeparator(debugViewCombo->count());
+    debugViewCombo->addItem(tr("Debug: DI Sun Shadow Mask"), 30);
+    debugViewCombo->addItem(tr("Debug: GI First Bounce"), 31);
+    debugViewCombo->addItem(tr("Debug: GI Hit Distance"), 32);
     debugViewCombo->setToolTip(tr("Viewport display pass"));
     debugViewCombo->setMinimumWidth(112);
     connect(debugViewCombo, qOverload<int>(&QComboBox::currentIndexChanged),

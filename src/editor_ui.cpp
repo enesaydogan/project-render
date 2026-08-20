@@ -3677,7 +3677,10 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
                                   "Debug: Bitangent (B)",
                                   "Debug: Tangent-Space Normal",
                                   "Debug: Geometric Normal",
-                                  "Debug: Normal Tex Raw RGB"};
+                                  "Debug: Normal Tex Raw RGB",
+                                  "Debug: DI Sun Shadow Mask",
+                                  "Debug: GI First Bounce",
+                                  "Debug: GI Hit Distance"};
       if (ImGui::Combo("Debug View", &g_debugMode, debugModes,
                        IM_ARRAYSIZE(debugModes))) {
         // Keep history when switching diagnostics so comparisons are from the

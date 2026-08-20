@@ -1383,29 +1383,22 @@ inline float3 EvaluateWavefrontGiSurfaceRadiance(
     float3 f0 = ComputeWavefrontSurfaceF0(baseColor, metallic, reflectionIor,
                                           specularWeight, specularColor);
     float3 viewDir = normalize(-incomingDirection);
-    float3 direct = float3(0.0, 0.0, 0.0);
+    // The GI candidate must NOT re-evaluate the direct sun at the bounce
+    // surface. Direct sun is a separate, shadow-tested light evaluated in the
+    // DI path (primary + secondary continuations). Re-adding it here let a
+    // sun ray that threaded a non-watertight arch-viz seam inject the sun
+    // disk into the interior as a bright blob (V-Ray keeps the sun out of the
+    // GI bounce evaluation too). The sun's one-bounce indirect is still
+    // captured by the diffuse continuation path, which uses the same clean
+    // shadow-task DI. `sun` is kept only for the thin-material translucency
+    // term below, which is a material property, not a seam leak.
     WavefrontLightSample sun = WavefrontSampleDirectionalLight(1.0);
     if (cloudRenderingEnabled > 0.5f) {
         sun.radiance *= CloudSunTransmittance(
             SpawnRayOrigin(surfacePos, geomNormal, sun.direction),
             sun.direction);
     }
-    float nDotL = saturate(dot(normal, sun.direction));
-    if (nDotL > 0.0 &&
-        WavefrontGiIsShadowVisible(
-            SpawnRayOrigin(surfacePos, geomNormal, sun.direction),
-            sun.direction, sun.maxDistance)) {
-        float3 sunDirect = WavefrontGiEvaluateBrdfLighting(
-            diffuseAlbedo, f0, roughness, clearcoat,
-            normal, viewDir, sun.direction, sun.radiance);
-        if (parallaxMapped) {
-            sunDirect *= WavefrontGiParallaxSelfShadow(
-                uv, sun.direction, worldNormal, worldTangent, texParallax,
-                parallaxDepthScale, textureLod);
-        }
-        direct += sunDirect;
-    }
-    float3 giLighting = direct;
+    float3 giLighting = float3(0.0, 0.0, 0.0);
 
     // Sample one local light (sun + local lights in GI for indirect color bleeding)
     WavefrontLightSamplerContext giSampler =
@@ -1649,6 +1642,88 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     // texture-sampling modes (Normal, Tangent-Space Normal).
     if (SHADER_DEBUG_MODE > 0.0 && !isMiss) {
         float3 debugColor = max(visibleEmissive, 0.0);
+        // DI/GI light-path diagnostics (modes 30..32). The views above come
+        // from the hit record; these actually trace light rays so we can see
+        // where light *really* reaches in an interior scene:
+        //   30 = DI sun shadow mask: green where the sun is unoccluded, red
+        //        where occluded. Interior pixels showing green = the sun is
+        //        leaking through geometry (direct-illumination leak).
+        //   31 = GI first-bounce radiance: what the cosine-weighted GI ray
+        //        actually sees. Sky/sun radiance showing up inside the room
+        //        = GI rays punching through panels (indirect leak).
+        //   32 = GI hit distance: red = the GI ray escaped to the sky (a
+        //        geometry gap), gray = distance to the first surface it hit
+        //        (near = dark, far = light). Pinpoints open seams.
+        const int dbgMode = (int)SHADER_DEBUG_MODE;
+        if (dbgMode == 30 || dbgMode == 31 || dbgMode == 32) {
+            const float3 dbgHitPos = state.origin + rayDir * record.hitT;
+            const float3 dbgShadingNormal =
+                UnpackNormalOctahedron(record.packedNormal);
+            const float3 dbgGeomNormal =
+                UnpackNormalOctahedron(record.packedGeomNormal);
+            if (dbgMode == 30) {
+                const float3 sunDir = normalize(lightDir.xyz);
+                RayDesc sunRay;
+                sunRay.Origin =
+                    SpawnRayOrigin(dbgHitPos, dbgGeomNormal, sunDir);
+                sunRay.Direction = sunDir;
+                sunRay.TMin = kSpawnRayTMin;
+                sunRay.TMax = 1000.0;
+                RayQuery<RAY_FLAG_SKIP_CLOSEST_HIT_SHADER |
+                         RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> sunQuery;
+                sunQuery.TraceRayInline(g_accel, RAY_FLAG_NONE, 0xFF, sunRay);
+                sunQuery.Proceed();
+                const bool sunVisible =
+                    (sunQuery.CommittedStatus() == COMMITTED_NOTHING);
+                debugColor = sunVisible ? float3(0.0, 1.0, 0.0)
+                                        : float3(1.0, 0.0, 0.0);
+            } else {
+                RNG dbgRng;
+                dbgRng.state =
+                    (record.pixelIndex * 0x9E3779B9u) ^
+                    (((uint)globalFrameCount + 1u) * 0x85EBCA6Bu) ^
+                    0xB5297A4Du;
+                const float3 giDir =
+                    BuildDiffuseContinuation(dbgShadingNormal, dbgRng);
+                RayDesc giRay;
+                giRay.Origin =
+                    SpawnRayOrigin(dbgHitPos, dbgGeomNormal, giDir);
+                giRay.Direction = giDir;
+                giRay.TMin = kSpawnRayTMin;
+                giRay.TMax = 10000.0;
+                RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> giQuery;
+                giQuery.TraceRayInline(g_accel, RAY_FLAG_NONE, 0xFF, giRay);
+                giQuery.Proceed();
+                if (dbgMode == 31) {
+                    // GI radiance: escaped = bright env, hit = dark proximity
+                    // so bright pixels unambiguously mean "escaped to the sky".
+                    if (giQuery.CommittedStatus() == COMMITTED_NOTHING) {
+                        debugColor =
+                            WavefrontEvaluateIndirectEnvironmentRadiance(
+                                giDir, dbgHitPos + giDir * 1000.0);
+                    } else if (giQuery.CommittedStatus() ==
+                               COMMITTED_TRIANGLE_HIT) {
+                        const float dbgHitDist = giQuery.CommittedRayT();
+                        debugColor = float3(0.05, 0.05, 0.05) *
+                                     saturate(2.0 / max(dbgHitDist, 0.01));
+                    }
+                } else {
+                    // GI hit distance: red = escaped to the sky (a gap),
+                    // gray = distance to the first surface it hit
+                    // (near = dark, far = light).
+                    if (giQuery.CommittedStatus() == COMMITTED_NOTHING) {
+                        debugColor = float3(1.0, 0.0, 0.0);
+                    } else if (giQuery.CommittedStatus() ==
+                               COMMITTED_TRIANGLE_HIT) {
+                        const float dbgHitDist = giQuery.CommittedRayT();
+                        debugColor =
+                            float3(0.03, 0.03, 0.03) +
+                            float3(0.18, 0.18, 0.18) *
+                                saturate(dbgHitDist / 50.0);
+                    }
+                }
+            }
+        }
         g_output[pixel] = float4(debugColor, 1.0);
         g_depth[pixel] = depth;
         g_linearDepth[pixel] = linearDepth;
