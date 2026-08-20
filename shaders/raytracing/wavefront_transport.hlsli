@@ -74,8 +74,8 @@ inline bool WavefrontTraceVisibility(float3 origin,
     RayDesc ray;
     ray.Origin = origin;
     ray.Direction = normalize(direction);
-    ray.TMin = 0.001;
-    ray.TMax = max(0.001, maxDistance - 0.002);
+    ray.TMin = kSpawnRayTMin;
+    ray.TMax = SpawnRayTMax(maxDistance);
 
     RayQuery<RAY_FLAG_SKIP_CLOSEST_HIT_SHADER |
              RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> query;
@@ -85,16 +85,10 @@ inline bool WavefrontTraceVisibility(float3 origin,
 }
 
 inline float3 WavefrontBuildShadowOrigin(float3 hitPos,
-                                         float3 worldNormal,
-                                         float3 lightDirection,
-                                         float bias)
+                                         float3 geomNormal,
+                                         float3 lightDirection)
 {
-    float3 N = normalize(worldNormal);
-    float3 L = normalize(lightDirection);
-    if (dot(N, L) < 0.0) {
-        N = -N;
-    }
-    return hitPos + N * bias;
+    return SpawnRayOrigin(hitPos, geomNormal, lightDirection);
 }
 
 inline float WavefrontDielectricF0FromIor(float ior)

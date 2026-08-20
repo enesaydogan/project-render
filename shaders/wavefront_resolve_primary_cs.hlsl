@@ -16,7 +16,7 @@ cbuffer WavefrontResolveConstants : register(b1)
 static const float2 kInvalidMvec = float2(-1e6, -1e6);
 static const uint kWavefrontSecondaryQueueCounter = WAVEFRONT_QUEUE_PATH_B;
 static const uint kWavefrontShadowQueueCounter = WAVEFRONT_QUEUE_SHADOW;
-static const float kWavefrontRayBias = 0.002f;
+
 
 inline uint2 WavefrontPixelCoord(uint pixelIndex)
 {
@@ -945,8 +945,8 @@ inline bool WavefrontGiIsShadowVisible(float3 origin,
     RayDesc shadowRay;
     shadowRay.Origin = origin;
     shadowRay.Direction = normalize(direction);
-    shadowRay.TMin = 0.002;
-    shadowRay.TMax = max(maxDistance, 0.002);
+    shadowRay.TMin = kSpawnRayTMin;
+    shadowRay.TMax = SpawnRayTMax(maxDistance);
 
     RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH |
              RAY_FLAG_SKIP_CLOSEST_HIT_SHADER> shadowQuery;
@@ -965,8 +965,8 @@ inline bool WavefrontAoOccluded(float3 origin, float3 direction,
     RayDesc aoRay;
     aoRay.Origin = origin;
     aoRay.Direction = normalize(direction);
-    aoRay.TMin = 0.002;
-    aoRay.TMax = max(maxDistance, 0.002);
+    aoRay.TMin = kSpawnRayTMin;
+    aoRay.TMax = SpawnRayTMax(maxDistance);
 
     RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH |
              RAY_FLAG_SKIP_CLOSEST_HIT_SHADER> aoQuery;
@@ -1009,7 +1009,7 @@ inline float WavefrontTraceAmbientOcclusion(float3 hitPos, float3 normal,
         if (traceInward) {
             float3 dir = SafeNormalize(align_to_normal(localDir, outwardNormal),
                                        outwardNormal);
-            float3 origin = hitPos + outwardNormal * kWavefrontRayBias;
+            float3 origin = OffsetRayOrigin(hitPos, outwardNormal);
             occluded += WavefrontAoOccluded(origin, dir, aoRadius) ? 1.0 : 0.0;
             sampleCount += 1.0;
         }
@@ -1017,7 +1017,7 @@ inline float WavefrontTraceAmbientOcclusion(float3 hitPos, float3 normal,
             float3 inwardNormal = -outwardNormal;
             float3 dir = SafeNormalize(align_to_normal(localDir, inwardNormal),
                                        inwardNormal);
-            float3 origin = hitPos + inwardNormal * kWavefrontRayBias;
+            float3 origin = OffsetRayOrigin(hitPos, inwardNormal);
             occluded += WavefrontAoOccluded(origin, dir, aoRadius) ? 1.0 : 0.0;
             sampleCount += 1.0;
         }
@@ -1124,6 +1124,11 @@ inline float3 EvaluateWavefrontGiSurfaceRadiance(
 
     const float3x4 objectToWorld = query.CommittedObjectToWorld3x4();
     const float3x4 worldToObject = query.CommittedWorldToObject3x4();
+    const float3 geomNormal = WorldGeometricNormalFromObjectVerts(
+        objectToWorld,
+        vertices[mesh.vbIndex][i0].position,
+        vertices[mesh.vbIndex][i1].position,
+        vertices[mesh.vbIndex][i2].position);
     float3 worldNormal = normalize(mul(localNormal, (float3x3)worldToObject));
     float4 worldTangent;
     worldTangent.xyz = normalize(mul((float3x3)objectToWorld,
@@ -1381,13 +1386,15 @@ inline float3 EvaluateWavefrontGiSurfaceRadiance(
     float3 direct = float3(0.0, 0.0, 0.0);
     WavefrontLightSample sun = WavefrontSampleDirectionalLight(1.0);
     if (cloudRenderingEnabled > 0.5f) {
-        sun.radiance *= CloudSunTransmittance(surfacePos + normal * kWavefrontRayBias,
-                                             sun.direction);
+        sun.radiance *= CloudSunTransmittance(
+            SpawnRayOrigin(surfacePos, geomNormal, sun.direction),
+            sun.direction);
     }
     float nDotL = saturate(dot(normal, sun.direction));
     if (nDotL > 0.0 &&
-        WavefrontGiIsShadowVisible(surfacePos + normal * kWavefrontRayBias,
-                                   sun.direction, sun.maxDistance)) {
+        WavefrontGiIsShadowVisible(
+            SpawnRayOrigin(surfacePos, geomNormal, sun.direction),
+            sun.direction, sun.maxDistance)) {
         float3 sunDirect = WavefrontGiEvaluateBrdfLighting(
             diffuseAlbedo, f0, roughness, clearcoat,
             normal, viewDir, sun.direction, sun.radiance);
@@ -1426,7 +1433,7 @@ inline float3 EvaluateWavefrontGiSurfaceRadiance(
         float giLocalNdotL = saturate(dot(normal, giLocal.direction));
         if (giLocalNdotL > 0.0 &&
             WavefrontGiIsShadowVisible(
-                surfacePos + normal * kWavefrontRayBias,
+                SpawnRayOrigin(surfacePos, geomNormal, giLocal.direction),
                 giLocal.direction, giLocal.maxDistance)) {
             float3 localDirect = WavefrontGiEvaluateBrdfLighting(
                 diffuseAlbedo, f0, roughness, clearcoat,
@@ -1452,6 +1459,7 @@ inline float3 EvaluateWavefrontGiSurfaceRadiance(
 
 inline GI_Reservoir GenerateWavefrontGiCandidate(float3 hitPos,
                                                  float3 normal,
+                                                 float3 geomNormal,
                                                  float3 diffuseAlbedo,
                                                  inout RNG rng)
 {
@@ -1468,9 +1476,9 @@ inline GI_Reservoir GenerateWavefrontGiCandidate(float3 hitPos,
     }
 
     RayDesc giRay;
-    giRay.Origin = hitPos + normal * kWavefrontRayBias;
+    giRay.Origin = SpawnRayOrigin(hitPos, geomNormal, candidateDir);
     giRay.Direction = candidateDir;
-    giRay.TMin = 0.001;
+    giRay.TMin = kSpawnRayTMin;
     giRay.TMax = 10000.0;
 
     RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> query;
@@ -1686,6 +1694,7 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     if (!isMiss) {
         float3 hitPos = state.origin + rayDir * record.hitT;
         normal = UnpackNormalOctahedron(record.packedNormal);
+        float3 geomNormal = UnpackNormalOctahedron(record.packedGeomNormal);
         albedo = UnpackPayloadAlbedo(record.packedAlbedo);
         float4 surface = WavefrontHitRecordSurface(record);
         roughness = saturate(surface.x);
@@ -1740,9 +1749,9 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             if (dirLenSq > 1.0e-8) {
                 mirrorDir *= rsqrt(dirLenSq);
                 RayDesc specProbe;
-                specProbe.Origin = hitPos + normal * kWavefrontRayBias;
+                specProbe.Origin = SpawnRayOrigin(hitPos, geomNormal, mirrorDir);
                 specProbe.Direction = mirrorDir;
-                specProbe.TMin = 0.001;
+                specProbe.TMin = kSpawnRayTMin;
                 specProbe.TMax = 10000.0;
                 RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> specQuery;
                 specQuery.TraceRayInline(g_accel, RAY_FLAG_NONE, 0xFF,
@@ -1866,7 +1875,8 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                         EmitWavefrontSecondaryPath(
                             secondaryIndex,
                             record.pixelIndex,
-                            hitPos + reflectionDirection * kWavefrontRayBias,
+                            SpawnRayOrigin(hitPos, geomNormal,
+                                           reflectionDirection),
                             reflectionDirection,
                             rng.state ^ 0xA511E9B3u,
                             reflectionThroughput,
@@ -1913,7 +1923,8 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                         EmitWavefrontSecondaryPath(
                             secondaryIndex,
                             record.pixelIndex,
-                            hitPos + transmissionDirection * kWavefrontRayBias,
+                            SpawnRayOrigin(hitPos, geomNormal,
+                                           transmissionDirection),
                             transmissionDirection,
                             rng.state,
                             transmissionThroughput,
@@ -1949,7 +1960,8 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                         EmitWavefrontSecondaryPath(
                             secondaryIndex,
                             record.pixelIndex,
-                            hitPos + reflectionDirection * kWavefrontRayBias,
+                            SpawnRayOrigin(hitPos, geomNormal,
+                                           reflectionDirection),
                             reflectionDirection,
                             rng.state ^ 0xA511E9B3u,
                             reflectionThroughput,
@@ -2058,7 +2070,7 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                         EmitWavefrontSecondaryPath(
                             secondaryIndex,
                             record.pixelIndex,
-                            hitPos + nextDirection * kWavefrontRayBias,
+                            SpawnRayOrigin(hitPos, geomNormal, nextDirection),
                             nextDirection,
                             rng.state,
                             nextThroughput,
@@ -2088,9 +2100,8 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                 WavefrontSampleDirectionalLight(1.0);
             if (cloudRenderingEnabled > 0.5f) {
                 explicitSunSample.radiance *= CloudSunTransmittance(
-                    WavefrontBuildShadowOrigin(hitPos, normal,
-                                               explicitSunSample.direction,
-                                               kWavefrontRayBias),
+                    WavefrontBuildShadowOrigin(hitPos, geomNormal,
+                                               explicitSunSample.direction),
                     explicitSunSample.direction);
             }
             float3 sunShadowWeight = state.throughput *
@@ -2107,9 +2118,8 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                 if (shadowIndex < shadowQueueCapacity) {
                     EmitWavefrontShadowTask(
                         shadowIndex,
-                        WavefrontBuildShadowOrigin(hitPos, normal,
-                                                   explicitSunSample.direction,
-                                                   kWavefrontRayBias),
+                        WavefrontBuildShadowOrigin(hitPos, geomNormal,
+                                                   explicitSunSample.direction),
                         explicitSunSample.direction,
                         explicitSunSample.maxDistance,
                         explicitSunSample.packedLightIndex,
@@ -2130,9 +2140,8 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             if (shadowIndex < shadowQueueCapacity) {
                 EmitWavefrontShadowTask(
                     shadowIndex,
-                    WavefrontBuildShadowOrigin(hitPos, normal,
-                                               selectedDirectLightSample.direction,
-                                               kWavefrontRayBias),
+                    WavefrontBuildShadowOrigin(hitPos, geomNormal,
+                                               selectedDirectLightSample.direction),
                     selectedDirectLightSample.direction,
                     selectedDirectLightSample.maxDistance,
                     selectedDirectLightSample.packedLightIndex,
@@ -2144,7 +2153,7 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             }
         }
 
-        giReservoir = GenerateWavefrontGiCandidate(hitPos, normal,
+        giReservoir = GenerateWavefrontGiCandidate(hitPos, normal, geomNormal,
                                                    diffuseAlbedo, rng);
         color += state.throughput *
                  EvaluateWavefrontGiReservoirContribution(
@@ -2270,9 +2279,9 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                     guideMirror *= rsqrt(guideDirLenSq);
                     RayDesc guideSpecProbe;
                     guideSpecProbe.Origin =
-                        guideHitPos + guideNormal * kWavefrontRayBias;
+                        SpawnRayOrigin(guideHitPos, guideNormal, guideMirror);
                     guideSpecProbe.Direction = guideMirror;
-                    guideSpecProbe.TMin = 0.001;
+                    guideSpecProbe.TMin = kSpawnRayTMin;
                     guideSpecProbe.TMax = 10000.0;
                     RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH>
                         guideSpecQuery;

@@ -1257,6 +1257,9 @@ void ClosestHitImpl(inout RayPayload payload,
     Vertex v0 = vertices[vbIndex][i0];
     Vertex v1 = vertices[vbIndex][i1];
     Vertex v2 = vertices[vbIndex][i2];
+    const float3x4 objectToWorld = ObjectToWorld3x4();
+    const float3 worldGeomNormal = WorldGeometricNormalFromObjectVerts(
+        objectToWorld, v0.position, v1.position, v2.position);
     
     // Interpolate UV
     float2 uv0 = v0.uv;
@@ -1685,6 +1688,7 @@ void ClosestHitImpl(inout RayPayload payload,
         PayloadSetColor(payload, color);
         payload.t = RayTCurrent();
         payload.packedNormal = PackNormalOctahedron(N);
+        payload.packedGeomNormal = PackNormalOctahedron(worldGeomNormal);
         payload.packedAlbedo = PackPayloadAlbedoCoat(BaseColor, clearcoat);
         PayloadSetCoatRoughness(payload, clearcoatRoughness);
         bool thinWalled = (!clayMode || clayPreserveTransparency) &&
@@ -1725,16 +1729,17 @@ void ClosestHitImpl(inout RayPayload payload,
         // Skip shadow ray entirely when sun is below hemisphere
         if (NdotL > 0.0) {
             RayDesc shadowRay;
-            shadowRay.Origin = P + N * 0.002;
+            shadowRay.Origin = SpawnRayOrigin(P, worldGeomNormal, L);
             shadowRay.Direction = L;
-            shadowRay.TMin = 0.002;
-            shadowRay.TMax = 1000.0;
+            shadowRay.TMin = kSpawnRayTMin;
+            shadowRay.TMax = SpawnRayTMax(1000.0);
 
             RayPayload shadowPayload;
             shadowPayload.t = 1.0;
             shadowPayload.packedColor1 = 0u;
             PayloadSetColor(shadowPayload, float3(0.0, 0.0, 0.0));
             shadowPayload.packedNormal = PackNormalOctahedron(float3(0.0, 1.0, 0.0));
+            shadowPayload.packedGeomNormal = PackNormalOctahedron(float3(0.0, 1.0, 0.0));
             shadowPayload.packedAlbedo = PackPayloadAlbedo(float3(0.0, 0.0, 0.0));
             shadowPayload.surface = MakePayloadSurface(1.0, 0.0, 0.0, 0.0);
             shadowPayload.packedIorType = PackPayloadIorType(1.0, RAY_TYPE_SHADOW, false, 1.0);
@@ -1794,7 +1799,9 @@ void ClosestHitImpl(inout RayPayload payload,
             if (NdotL_back > 0.0) {
                 float3 backRadiance = lightColor.rgb * lightColor.w;
                 if (cloudRenderingEnabled > 0.5f) {
-                    backRadiance *= CloudSunTransmittance(P - N * 0.002, normalize(lightDir.xyz));
+                    backRadiance *= CloudSunTransmittance(
+                        SpawnRayOrigin(P, worldGeomNormal, normalize(lightDir.xyz)),
+                        normalize(lightDir.xyz));
                 }
                 Lo += (DiffuseAlbedo / PI) * backRadiance * NdotL_back * translucency;
             }
@@ -1817,6 +1824,7 @@ void ClosestHitImpl(inout RayPayload payload,
     PayloadSetColor(payload, color);
     payload.t = RayTCurrent();
     payload.packedNormal = PackNormalOctahedron(N);
+    payload.packedGeomNormal = PackNormalOctahedron(worldGeomNormal);
     payload.packedAlbedo = PackPayloadAlbedoCoat(BaseColor, clearcoat);
     PayloadSetCoatRoughness(payload, clearcoatRoughness);
     bool thinWalled = (!clayMode || clayPreserveTransparency) &&
@@ -1988,14 +1996,15 @@ void AnyHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttributes a
         }
     }
 
-    // For shadow or diffuse (GI visibility) rays hitting glass or thin-walled
-    // materials, we want to let light through.  Smooth BLEND glass still sets
+    // Visibility through actual refractive transmission only. Thin-walled or
+    // translucent flags without transmission must not punch holes in opaque
+    // architecture (walls, frames, ceilings). Smooth BLEND glass still sets
     // the alpha-tested runtime flag so any-hit can sample texture alpha, but
     // only MASK/cutout materials should block this visibility shortcut.
     if (rayType == RAY_TYPE_SHADOW || rayType == RAY_TYPE_DIFFUSE || rayType == RAY_TYPE_GI_EVAL) {
+        const float transmission = saturate(mat.pbrParams_flags.z);
         const bool transmissiveVisibility =
-            ((matFlags & (MATERIAL_FLAG_GLASS | MATERIAL_FLAG_THIN_WALLED | MATERIAL_FLAG_TRANSLUCENT)) != 0) &&
-            alphaCutoff < 0.0;
+            (transmission > 1.0e-3) && (alphaCutoff < 0.0);
         if (transmissiveVisibility) {
             IgnoreHit();
         }

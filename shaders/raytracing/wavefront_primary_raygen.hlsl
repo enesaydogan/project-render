@@ -44,7 +44,7 @@ void WavefrontPrimaryRayGen()
     RayDesc ray;
     ray.Origin = traceOrigin;
     ray.Direction = traceDirection;
-    ray.TMin = 0.002;
+    ray.TMin = kSpawnRayTMin;
     ray.TMax = 10000.0;
 
     RayPayload payload = InitRayPayload(currentRayType);
@@ -74,6 +74,7 @@ void WavefrontPrimaryRayGen()
     record.packedColor0 = payload.packedColor0;
     record.packedColor1 = payload.packedColor1;
     record.packedNormal = payload.packedNormal;
+    record.packedGeomNormal = payload.packedGeomNormal;
     record.packedAlbedo = payload.packedAlbedo;
     record.packedIorType = payload.packedIorType;
     record.packedReflectionIor = payload.packedReflectionIor;

@@ -58,6 +58,7 @@ void WavefrontShadowRayGen()
     shadowPayload.packedColor1 = 0u;
     PayloadSetColor(shadowPayload, float3(0.0, 0.0, 0.0));
     shadowPayload.packedNormal = PackNormalOctahedron(float3(0.0, 1.0, 0.0));
+    shadowPayload.packedGeomNormal = PackNormalOctahedron(float3(0.0, 1.0, 0.0));
     shadowPayload.packedAlbedo = PackPayloadAlbedo(float3(0.0, 0.0, 0.0));
     shadowPayload.surface = MakePayloadSurface(1.0, 0.0, 0.0, 0.0);
     shadowPayload.packedIorType = PackPayloadIorType(1.0, RAY_TYPE_SHADOW, false, 1.0);
@@ -69,8 +70,8 @@ void WavefrontShadowRayGen()
     RayDesc shadowRay;
     shadowRay.Origin = task.origin;
     shadowRay.Direction = visibilityDirection;
-    shadowRay.TMin = 0.001;
-    shadowRay.TMax = max(0.001, task.maxDistance - 0.002);
+    shadowRay.TMin = kSpawnRayTMin;
+    shadowRay.TMax = SpawnRayTMax(task.maxDistance);
 
     // Miss shader index 1 = ShadowMiss (visibility only, skips sky/clouds).
     TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, 0xFF, 0, 0, 1, shadowRay, shadowPayload);

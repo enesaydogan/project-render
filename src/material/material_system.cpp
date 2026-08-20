@@ -370,8 +370,7 @@ bool MaterialAffectsRtStructure(const Asset::Material &material) {
   return material.alphaMode != "OPAQUE" ||
          material.diffuseColor[3] < 0.999f ||
          material.opacityTexture >= 0 ||
-         effectiveTransmission > kMaterialFlagEpsilon ||
-         material.thinWalled > 0.5f;
+         effectiveTransmission > kMaterialFlagEpsilon;
 }
 
 bool MaterialsEqual(const Asset::Material &a, const Asset::Material &b) {
@@ -757,7 +756,7 @@ uint32_t BuildRuntimeMaterialFlags(const Asset::Material &material) {
       std::fabs(material.uvRotationDegrees) > 1e-5f) {
     flags |= kRuntimeMaterialFlagUvTransform;
   }
-  if (transmission > kMaterialFlagEpsilon || material.thinWalled > 0.5f) {
+  if (transmission > kMaterialFlagEpsilon) {
     flags |= kRuntimeMaterialFlagGlass;
   }
   if (material.doubleSided) {

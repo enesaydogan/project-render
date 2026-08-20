@@ -12,7 +12,7 @@ cbuffer WavefrontSecondaryResolveConstants : register(b1)
 static const uint kWavefrontContinuationQueueCounterA = WAVEFRONT_QUEUE_PATH_A;
 static const uint kWavefrontContinuationQueueCounterB = WAVEFRONT_QUEUE_PATH_B;
 static const uint kWavefrontShadowQueueCounter = WAVEFRONT_QUEUE_SHADOW;
-static const float kWavefrontRayBias = 0.002f;
+
 
 inline uint2 WavefrontSecondaryPixelCoord(uint pixelIndex)
 {
@@ -225,6 +225,7 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
         float3 rayDir = normalize(state.direction);
         float3 hitPos = state.origin + rayDir * record.hitT;
         float3 normal = UnpackNormalOctahedron(record.packedNormal);
+        float3 geomNormal = UnpackNormalOctahedron(record.packedGeomNormal);
         float3 albedo = UnpackPayloadAlbedo(record.packedAlbedo);
         float4 surface = WavefrontHitRecordSurface(record);
         float roughness = saturate(surface.x);
@@ -357,7 +358,7 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                     continuationIndex,
                     destinationIsQueueA,
                     record.pixelIndex,
-                    hitPos + nextDirection * kWavefrontRayBias,
+                    SpawnRayOrigin(hitPos, geomNormal, nextDirection),
                     nextDirection,
                     rng.state,
                     nextThroughput,
@@ -411,9 +412,8 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             if (shadowIndex < shadowQueueCapacity) {
                 EmitWavefrontShadowTask(
                     shadowIndex,
-                    WavefrontBuildShadowOrigin(hitPos, normal,
-                                               explicitSunSample.direction,
-                                               kWavefrontRayBias),
+                    WavefrontBuildShadowOrigin(hitPos, geomNormal,
+                                               explicitSunSample.direction),
                     explicitSunSample.direction,
                     explicitSunSample.maxDistance,
                     explicitSunSample.packedLightIndex,
@@ -442,9 +442,8 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             if (shadowIndex < shadowQueueCapacity) {
                 EmitWavefrontShadowTask(
                     shadowIndex,
-                    WavefrontBuildShadowOrigin(hitPos, normal,
-                                               lightSample.direction,
-                                               kWavefrontRayBias),
+                    WavefrontBuildShadowOrigin(hitPos, geomNormal,
+                                               lightSample.direction),
                     lightSample.direction,
                     lightSample.maxDistance,
                     lightSample.packedLightIndex,
@@ -485,9 +484,8 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                     if (shadowIndex < shadowQueueCapacity) {
                         EmitWavefrontShadowTask(
                             shadowIndex,
-                            WavefrontBuildShadowOrigin(hitPos, normal,
-                                                       envSample.L,
-                                                       kWavefrontRayBias),
+                            WavefrontBuildShadowOrigin(hitPos, geomNormal,
+                                                       envSample.L),
                             envSample.L,
                             10000.0,
                             WavefrontPackLightSampleMetadata(

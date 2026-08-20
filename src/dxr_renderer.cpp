@@ -196,8 +196,9 @@ struct WavefrontHitRecordGpu {
   uint32_t guidePackedTransmission;
   uint32_t guidePackedSpecular;
   float guideSurface[4];
+  uint32_t packedGeomNormal;
 };
-static_assert(sizeof(WavefrontHitRecordGpu) == 136,
+static_assert(sizeof(WavefrontHitRecordGpu) == 140,
               "WavefrontHitRecordGpu must stay tightly packed.");
 
 struct WavefrontShadowTaskGpu {
@@ -227,9 +228,9 @@ struct WavefrontDispatchRaysRecordGpu {
 static_assert(sizeof(WavefrontDispatchRaysRecordGpu) == 112,
               "WavefrontDispatchRaysRecordGpu must match indirect buffer stride.");
 
-static constexpr UINT kWavefrontAbiVersion = 8;
+static constexpr UINT kWavefrontAbiVersion = 9;
 static constexpr UINT kWavefrontPathStateDwords = 12;
-static constexpr UINT kWavefrontHitRecordDwords = 34;
+static constexpr UINT kWavefrontHitRecordDwords = 35;
 static constexpr UINT kWavefrontShadowTaskDwords = 12;
 static constexpr UINT kWavefrontDispatchArgsDwords = 4;
 static constexpr UINT kWavefrontQueueCounterCount = 16;
@@ -279,7 +280,7 @@ static const char *WavefrontQueueProfileName(WavefrontQueueProfile profile) {
   }
   return "unknown";
 }
-static_assert(kWavefrontAbiVersion == 8,
+static_assert(kWavefrontAbiVersion == 9,
               "Bump shader WAVEFRONT_ABI_VERSION and docs with ABI changes.");
 static_assert(sizeof(WavefrontPathStateGpu) / sizeof(uint32_t) ==
                   kWavefrontPathStateDwords,
@@ -4701,8 +4702,9 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   hitSub.pDesc = &hitGroupDesc;
 
   // Must match RayPayload in shaders/raytracing/common.hlsli:
-  // float t + 8 packed uints + float4 surface + uint parallax = 14 dwords.
-  constexpr UINT kRayPayloadSizeInBytes = 14u * sizeof(uint32_t);
+  // float t + 9 packed uints + float4 surface + uint parallax = 15 dwords.
+  // Round up to 16 dwords so float4 alignment cannot overflow the payload.
+  constexpr UINT kRayPayloadSizeInBytes = 16u * sizeof(uint32_t);
   fprintf(stderr, "DxrRenderer: MaxPayloadSizeInBytes=%u\n",
           kRayPayloadSizeInBytes);
   shaderConfig.MaxPayloadSizeInBytes = kRayPayloadSizeInBytes;
@@ -5447,7 +5449,10 @@ static bool IsMaterialAlphaTestedOrGlass(const Asset::Material &m) {
   const float metalness = (std::clamp)(m.metalness, 0.0f, 1.0f);
   const float transmission =
       (std::clamp)(m.transmissionWeight, 0.0f, 1.0f) * (1.0f - metalness);
-  const bool glassLike = (transmission > 1.0e-5f) || (m.thinWalled > 0.5f);
+  // Thin-walled without transmission is still opaque (interior walls). Only
+  // actual refractive transmission needs a non-opaque BLAS so any-hit can
+  // skip visibility through glass.
+  const bool glassLike = transmission > 1.0e-3f;
   return alphaTested || glassLike;
 }
 

@@ -7,6 +7,7 @@ static RayPayload InitWavefrontSecondaryPayload(uint rayType)
     payload.packedColor1 = 0u;
     PayloadSetColor(payload, float3(0.0, 0.0, 0.0));
     payload.packedNormal = PackNormalOctahedron(float3(0.0, 1.0, 0.0));
+    payload.packedGeomNormal = PackNormalOctahedron(float3(0.0, 1.0, 0.0));
     payload.packedAlbedo = PackPayloadAlbedo(float3(0.0, 0.0, 0.0));
     payload.surface = MakePayloadSurface(1.0, 0.0, 0.0, 0.0);
     payload.packedIorType = PackPayloadIorType(1.0, rayType, false, 1.0);
@@ -89,7 +90,7 @@ void WavefrontSecondaryRayGen()
     RayDesc ray;
     ray.Origin = state.origin;
     ray.Direction = traceDirection;
-    ray.TMin = 0.002;
+    ray.TMin = kSpawnRayTMin;
     ray.TMax = 10000.0;
 
     // Legacy deterministic glass reflections trace with GI_EVAL payload
@@ -109,6 +110,7 @@ void WavefrontSecondaryRayGen()
     record.packedColor0 = payload.packedColor0;
     record.packedColor1 = payload.packedColor1;
     record.packedNormal = payload.packedNormal;
+    record.packedGeomNormal = payload.packedGeomNormal;
     record.packedAlbedo = payload.packedAlbedo;
     record.packedIorType = payload.packedIorType;
     record.packedReflectionIor = payload.packedReflectionIor;

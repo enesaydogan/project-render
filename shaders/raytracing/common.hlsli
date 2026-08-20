@@ -625,9 +625,9 @@ struct WavefrontPathState
     uint packedState;
 };
 
-static const uint WAVEFRONT_ABI_VERSION = 8u;
+static const uint WAVEFRONT_ABI_VERSION = 9u;
 static const uint WAVEFRONT_PATH_STATE_DWORDS = 12u;
-static const uint WAVEFRONT_HIT_RECORD_DWORDS = 34u;
+static const uint WAVEFRONT_HIT_RECORD_DWORDS = 35u;
 static const uint WAVEFRONT_SHADOW_TASK_DWORDS = 12u;
 static const uint WAVEFRONT_DISPATCH_ARGS_DWORDS = 4u;
 static const uint WAVEFRONT_QUEUE_PATH_A = 0u;
@@ -667,6 +667,7 @@ struct WavefrontHitRecord
     uint guidePackedTransmission;
     uint guidePackedSpecular;
     float4 guideSurface;
+    uint packedGeomNormal;
 };
 
 static const uint WAVEFRONT_HIT_STATE_MISS = 0x80000000u;
@@ -750,7 +751,8 @@ struct RayPayload
     float t;              // Hit distance (-1 for miss)
     uint packedColor0;    // R,G as fp16
     uint packedColor1;    // B as fp16 (low 16 bits)
-    uint packedNormal;    // Octahedral packed normal
+    uint packedNormal;    // Octahedral packed shading normal
+    uint packedGeomNormal; // Octahedral packed geometric face normal
     uint packedAlbedo;    // 3x8 UNORM base color
     uint packedIorType;   // 16-bit half refraction IOR + rayType/thin/specWeight
     uint packedReflectionIor; // 16-bit half reflection IOR
@@ -785,6 +787,68 @@ inline float3 UnpackNormalOctahedron(uint packed)
         n.xy = (1.0 - abs(n.yx)) * signNotZero;
     }
     return normalize(n);
+}
+
+// Spawned secondary/shadow TMin after Wächter–Binder origin offset. A 2 mm
+// world-space TMin punches through interior corners and thin window frames;
+// the integer origin offset already separates the ray from its originating
+// primitive, so TMin only has to cover residual ulp error.
+static const float kSpawnRayTMin = 1.0e-5f;
+
+// Wächter and Binder, "A Fast and Robust Method for Avoiding Self-Intersection",
+// JCGT 6(1), 2017. Scale-independent integer offset along the geometric normal.
+inline float3 OffsetRayOrigin(float3 p, float3 n)
+{
+    const float origin = 1.0 / 32.0;
+    const float floatScale = 1.0 / 65536.0;
+    const float intScale = 256.0;
+
+    int3 ofI = int3(intScale * n.x, intScale * n.y, intScale * n.z);
+    float3 pI = float3(
+        asfloat(asint(p.x) + ((p.x < 0.0) ? -ofI.x : ofI.x)),
+        asfloat(asint(p.y) + ((p.y < 0.0) ? -ofI.y : ofI.y)),
+        asfloat(asint(p.z) + ((p.z < 0.0) ? -ofI.z : ofI.z)));
+
+    return float3(
+        abs(p.x) < origin ? p.x + floatScale * n.x : pI.x,
+        abs(p.y) < origin ? p.y + floatScale * n.y : pI.y,
+        abs(p.z) < origin ? p.z + floatScale * n.z : pI.z);
+}
+
+inline float3 ComputeWorldGeometricNormal(float3 p0, float3 p1, float3 p2)
+{
+    float3 ng = cross(p1 - p0, p2 - p0);
+    float lenSq = dot(ng, ng);
+    return (lenSq > 1.0e-20) ? ng * rsqrt(lenSq) : float3(0.0, 1.0, 0.0);
+}
+
+inline float3 WorldGeometricNormalFromObjectVerts(float3x4 objectToWorld,
+                                                 float3 p0, float3 p1, float3 p2)
+{
+    float3 wp0 = mul(objectToWorld, float4(p0, 1.0)).xyz;
+    float3 wp1 = mul(objectToWorld, float4(p1, 1.0)).xyz;
+    float3 wp2 = mul(objectToWorld, float4(p2, 1.0)).xyz;
+    return ComputeWorldGeometricNormal(wp0, wp1, wp2);
+}
+
+// Offset p onto the hemisphere of `direction` using the geometric normal.
+// Continuation, reflection, transmission, and shadow rays all go through here
+// so grazing rays cannot skip the adjacent wall at a concave corner.
+inline float3 SpawnRayOrigin(float3 p, float3 geomNormal, float3 direction)
+{
+    float nLenSq = dot(geomNormal, geomNormal);
+    float3 n = (nLenSq > 1.0e-12) ? geomNormal * rsqrt(nLenSq)
+                                  : float3(0.0, 1.0, 0.0);
+    float dLenSq = dot(direction, direction);
+    if (dLenSq > 1.0e-12 && dot(n, direction) < 0.0) {
+        n = -n;
+    }
+    return OffsetRayOrigin(p, n);
+}
+
+inline float SpawnRayTMax(float maxDistance)
+{
+    return max(kSpawnRayTMin, maxDistance - kSpawnRayTMin);
 }
 
 inline void PayloadSetColor(inout RayPayload p, float3 c)
@@ -1496,6 +1560,7 @@ inline RayPayload InitRayPayload(uint rayType)
     p.packedColor1 = 0u;
     PayloadSetColor(p, float3(0.0, 0.0, 0.0));
     p.packedNormal = PackNormalOctahedron(float3(0.0, 1.0, 0.0));
+    p.packedGeomNormal = PackNormalOctahedron(float3(0.0, 1.0, 0.0));
     p.packedAlbedo = PackPayloadAlbedo(float3(0.0, 0.0, 0.0));
     p.surface = MakePayloadSurface(1.0, 0.0, 0.0, 0.0);
     p.packedIorType = PackPayloadIorType(1.0, rayType, false, 1.0);

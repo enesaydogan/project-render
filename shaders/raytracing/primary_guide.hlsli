@@ -31,7 +31,7 @@ inline void TracePrimaryGuide(float3 initialOrigin,
         RayDesc ray;
         ray.Origin = guideOrigin;
         ray.Direction = guideDirection;
-        ray.TMin = 0.002;
+        ray.TMin = kSpawnRayTMin;
         ray.TMax = 10000.0;
 
         RayPayload payload = InitRayPayload(guideRayType);
@@ -74,7 +74,11 @@ inline void TracePrimaryGuide(float3 initialOrigin,
             }
         }
 
-        guideOrigin = guidePos + nextDirection * 0.002;
+        {
+            const float3 geomNormal =
+                UnpackNormalOctahedron(payload.packedGeomNormal);
+            guideOrigin = SpawnRayOrigin(guidePos, geomNormal, nextDirection);
+        }
         guideDirection = normalize(nextDirection);
         guideRayType = RAY_TYPE_REFRACTION;
         guideState |= WAVEFRONT_GUIDE_STATE_THROUGH_TRANSMISSION;
