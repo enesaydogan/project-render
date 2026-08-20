@@ -1383,22 +1383,42 @@ inline float3 EvaluateWavefrontGiSurfaceRadiance(
     float3 f0 = ComputeWavefrontSurfaceF0(baseColor, metallic, reflectionIor,
                                           specularWeight, specularColor);
     float3 viewDir = normalize(-incomingDirection);
-    // The GI candidate must NOT re-evaluate the direct sun at the bounce
-    // surface. Direct sun is a separate, shadow-tested light evaluated in the
-    // DI path (primary + secondary continuations). Re-adding it here let a
-    // sun ray that threaded a non-watertight arch-viz seam inject the sun
-    // disk into the interior as a bright blob (V-Ray keeps the sun out of the
-    // GI bounce evaluation too). The sun's one-bounce indirect is still
-    // captured by the diffuse continuation path, which uses the same clean
-    // shadow-task DI. `sun` is kept only for the thin-material translucency
-    // term below, which is a material property, not a seam leak.
+    // The GI bounce evaluates the direct sun at the bounce surface so a
+    // sunlit floor/wall reflects its color onto the interior (color bleeding:
+    // sun on a green carpet radiates green). The shadow test rejects sun that
+    // threads a narrow seam between two nearly coincident faces (arch-viz
+    // boxes face-to-face), so it cannot leak into the interior through a seam
+    // while real openings (windows/dome) keep their color-bleeding light.
     WavefrontLightSample sun = WavefrontSampleDirectionalLight(1.0);
     if (cloudRenderingEnabled > 0.5f) {
         sun.radiance *= CloudSunTransmittance(
             SpawnRayOrigin(surfacePos, geomNormal, sun.direction),
             sun.direction);
     }
-    float3 giLighting = float3(0.0, 0.0, 0.0);
+    float3 direct = float3(0.0, 0.0, 0.0);
+    float nDotL = saturate(dot(normal, sun.direction));
+    if (nDotL > 0.0 &&
+        WavefrontGiIsShadowVisible(
+            SpawnRayOrigin(surfacePos, geomNormal, sun.direction),
+            sun.direction, sun.maxDistance)) {
+        float3 sunDirect = WavefrontGiEvaluateBrdfLighting(
+            diffuseAlbedo, f0, roughness, clearcoat,
+            normal, viewDir, sun.direction, sun.radiance);
+        if (parallaxMapped) {
+            sunDirect *= WavefrontGiParallaxSelfShadow(
+                uv, sun.direction, worldNormal, worldTangent, texParallax,
+                parallaxDepthScale, textureLod);
+        }
+        // V-Ray-style secondary clamp: a GI-bounce ray that threads a hole in
+        // non-watertight arch-viz geometry can inject the full sun disk here
+        // as a bright blob. Clamping the sun's contribution at the bounce
+        // caps that blowout while keeping the color-bleeding tint. This only
+        // touches the sun at bounce surfaces — it does NOT dim window GI.
+        direct += min(sunDirect, float3(kGiSecondarySunClamp,
+                                        kGiSecondarySunClamp,
+                                        kGiSecondarySunClamp));
+    }
+    float3 giLighting = direct;
 
     // Sample one local light (sun + local lights in GI for indirect color bleeding)
     WavefrontLightSamplerContext giSampler =

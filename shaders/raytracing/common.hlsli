@@ -795,6 +795,16 @@ inline float3 UnpackNormalOctahedron(uint packed)
 // primitive, so TMin only has to cover residual ulp error.
 static const float kSpawnRayTMin = 1.0e-5f;
 
+// V-Ray-style "clamp secondary rays" equivalent, applied to the sun's
+// contribution at GI bounce surfaces. A GI-bounce ray that threads a hole in
+// non-watertight arch-viz geometry can inject the full sun disk here as a
+// bright blob; clamping caps that blowout while keeping the color-bleeding
+// tint (sun on a green carpet still radiates green). This only caps the sun
+// at bounce surfaces — it does NOT dim window/environment GI. Tunable: lower
+// = less leak (dimmer indirect sun), higher = brighter color bleeding (more
+// visible leak through model gaps).
+static const float kGiSecondarySunClamp = 1000.0f;
+
 // Wächter and Binder, "A Fast and Robust Method for Avoiding Self-Intersection",
 // JCGT 6(1), 2017. Scale-independent integer offset along the geometric normal.
 inline float3 OffsetRayOrigin(float3 p, float3 n)
