@@ -813,6 +813,13 @@ bool WriteAppDataString(Animatable *owner, DWORD subId, const std::string &value
     return false;
   }
 
+  // Skip no-op rewrites. Remove+Add AppDataChunk mutates the Animatable, which
+  // dirties the scene and can cascade into Material Editor / reference update
+  // work for every material we "touch" during identifier prep.
+  if (ReadAppDataString(owner, subId) == value) {
+    return true;
+  }
+
   owner->RemoveAppDataChunk(kPersistentIdAppDataClassId, UTILITY_CLASS_ID, subId);
   void *data = MAX_malloc(static_cast<DWORD>(value.size() + 1));
   if (!data) {
@@ -4716,15 +4723,75 @@ bool CaptureSceneColorMaterialSnapshot(INode *node,
   return true;
 }
 
-// Cheap, read-only material change fingerprint used by the verification sweep.
-// It re-reads only legacy scalar material getters plus the set of populated
-// texmap slot pointers (no texture evaluation or baking). This catches the
-// common live-link material edits -- color, gloss, transparency, emissive,
-// material swap, map assignment/swap -- without paying for a full texture
-// re-bake on every sweep. For Physical Material it also folds in the key
-// authored scalars (base_weight/metalness/roughness/reflectivity/...) that the
-// legacy Mtl getters do not surface. A full snapshot re-capture is triggered
-// only when this cheap fingerprint changes.
+// Fold StdUVGen tiling/offset/angle (and map channel) into a cheap fingerprint.
+// Bitmap texture "size" edits in Max are UV scale changes; without this the
+// dirty-material gate and verification sweeps treat them as no-ops and never
+// re-capture, so the engine keeps the old uvScale.
+void AppendTexmapUvTransformFingerprint(Texmap *texmap, TimeValue time,
+                                        uint64_t *fingerprint,
+                                        std::unordered_set<Texmap *> *visited,
+                                        int depth) {
+  if (!texmap || !fingerprint || !visited || depth > 8) {
+    return;
+  }
+  if (!visited->insert(texmap).second) {
+    return;
+  }
+
+  if (UVGen *uvGen = texmap->GetTheUVGen()) {
+    if (StdUVGen *stdUv = dynamic_cast<StdUVGen *>(uvGen)) {
+      // Tiling ("size"), offset, angles, map channel, wrap flags, and
+      // real-world scale — the Coordinates rollup values users change most.
+      *fingerprint = HashCombine(*fingerprint, HashFloat(stdUv->GetUScl(time)));
+      *fingerprint = HashCombine(*fingerprint, HashFloat(stdUv->GetVScl(time)));
+      *fingerprint = HashCombine(*fingerprint, HashFloat(stdUv->GetUOffs(time)));
+      *fingerprint = HashCombine(*fingerprint, HashFloat(stdUv->GetVOffs(time)));
+      *fingerprint = HashCombine(*fingerprint, HashFloat(stdUv->GetUAng(time)));
+      *fingerprint = HashCombine(*fingerprint, HashFloat(stdUv->GetVAng(time)));
+      *fingerprint = HashCombine(*fingerprint, HashFloat(stdUv->GetWAng(time)));
+      *fingerprint = HashCombine(*fingerprint, HashFloat(stdUv->GetAng(time)));
+      *fingerprint = HashCombine(*fingerprint,
+                                 static_cast<uint64_t>(stdUv->GetMapChannel()));
+      *fingerprint = HashCombine(
+          *fingerprint, static_cast<uint64_t>(stdUv->GetTextureTiling()));
+      *fingerprint = HashCombine(
+          *fingerprint, stdUv->GetUseRealWorldScale() ? 1ull : 0ull);
+    }
+  }
+
+  for (int subIndex = 0; subIndex < texmap->NumSubTexmaps(); ++subIndex) {
+    AppendTexmapUvTransformFingerprint(texmap->GetSubTexmap(subIndex), time,
+                                       fingerprint, visited, depth + 1);
+  }
+
+  // Multi/Sub (and similar) expose sub-materials as Texmaps; walk those
+  // materials' map slots so nested BitmapTex UV edits are visible.
+  if (Mtl *asMaterial = dynamic_cast<Mtl *>(texmap)) {
+    for (int subMtlIndex = 0; subMtlIndex < asMaterial->NumSubMtls();
+         ++subMtlIndex) {
+      Mtl *subMaterial = asMaterial->GetSubMtl(subMtlIndex);
+      if (!subMaterial) {
+        continue;
+      }
+      for (int subMapIndex = 0; subMapIndex < subMaterial->NumSubTexmaps();
+           ++subMapIndex) {
+        AppendTexmapUvTransformFingerprint(subMaterial->GetSubTexmap(subMapIndex),
+                                           time, fingerprint, visited,
+                                           depth + 1);
+      }
+    }
+  }
+}
+
+// Cheap, read-only material change fingerprint used by the verification sweep
+// and the dirty-material gate. It re-reads legacy scalar material getters, the
+// set of populated texmap slot pointers, and StdUVGen tiling/offset/angle (no
+// texture evaluation or baking). This catches the common live-link material
+// edits -- color, gloss, transparency, emissive, material swap, map
+// assignment/swap, UV size/tiling -- without paying for a full texture re-bake
+// on every sweep. For Physical Material it also folds in the key authored
+// scalars that the legacy Mtl getters do not surface. A full snapshot
+// re-capture is triggered only when this cheap fingerprint changes.
 uint64_t ComputeMaterialCheapFingerprint(Interface *ip, INode *node) {
   uint64_t fingerprint = 1469598103934665603ull;  // FNV-1a offset basis
   if (!node) {
@@ -4743,9 +4810,17 @@ uint64_t ComputeMaterialCheapFingerprint(Interface *ip, INode *node) {
   fingerprint =
       HashCombine(fingerprint,
                   static_cast<uint64_t>(reinterpret_cast<uintptr_t>(material)));
-  const std::string stableId = GetOrCreateMaterialGuid(material);
-  for (char c : stableId) {
-    fingerprint = HashCombine(fingerprint, static_cast<uint64_t>(c));
+  // Read-only: never create/write material AppData from the cheap fingerprint
+  // path. Opening the Material Editor (and material verification sweeps) must
+  // not mutate materials as a side effect.
+  const std::string stableId =
+      ReadAppDataString(material, kMaterialGuidAppDataSubId);
+  if (stableId.empty()) {
+    fingerprint = HashCombine(fingerprint, 0x6e6f477569644d74ull); // "noGuidMt"
+  } else {
+    for (char c : stableId) {
+      fingerprint = HashCombine(fingerprint, static_cast<uint64_t>(c));
+    }
   }
 
   const Color diffuse = material->GetDiffuse();
@@ -4767,13 +4842,17 @@ uint64_t ComputeMaterialCheapFingerprint(Interface *ip, INode *node) {
   fingerprint =
       HashCombine(fingerprint, material->GetSelfIllumColorOn() ? 1ull : 0ull);
 
+  const TimeValue time = ip ? ip->GetTime() : 0;
+  std::unordered_set<Texmap *> visitedTexmaps;
+
   // Lightweight per-slot map presence so assigning/swapping a texture is
   // detected without evaluating or baking the maps. Slot indices are stable per
   // material class, so hashing (slotIndex, texmap pointer) is just as
   // discriminating as slot names but avoids a wide-char conversion per slot on
   // every verification pass. For Multi/Sub, GetSubTexmap returns the
   // sub-materials as Texmaps; fold in their legacy scalars so editing a color
-  // inside a sub-slot also changes the fingerprint.
+  // inside a sub-slot also changes the fingerprint. UV tiling/offset/angle are
+  // folded in via AppendTexmapUvTransformFingerprint.
   const int subTexmapCount = material->NumSubTexmaps();
   for (int slotIndex = 0; slotIndex < subTexmapCount; ++slotIndex) {
     Texmap *texmap = material->GetSubTexmap(slotIndex);
@@ -4784,6 +4863,8 @@ uint64_t ComputeMaterialCheapFingerprint(Interface *ip, INode *node) {
     fingerprint =
         HashCombine(fingerprint,
                     static_cast<uint64_t>(reinterpret_cast<uintptr_t>(texmap)));
+    AppendTexmapUvTransformFingerprint(texmap, time, &fingerprint,
+                                       &visitedTexmaps, 0);
     if (Mtl *subMaterial = dynamic_cast<Mtl *>(texmap)) {
       const Color subDiffuse = subMaterial->GetDiffuse();
       fingerprint = HashCombine(fingerprint, HashFloat(subDiffuse.r));
@@ -4803,7 +4884,6 @@ uint64_t ComputeMaterialCheapFingerprint(Interface *ip, INode *node) {
   // Physical Material authored scalars that legacy getters do not surface.
   const std::string classNameLower = GetObjectClassNameLower(material);
   if (classNameLower.find("physical") != std::string::npos) {
-    const TimeValue time = ip ? ip->GetTime() : 0;
     const char *physicalFloatParams[] = {
         "base_weight", "metalness", "roughness", "reflectivity",
         "transparency", "coating",   "emission"};
@@ -5220,6 +5300,81 @@ bool NodeCanPotentiallyProduceMesh(Interface *ip, INode *node) {
   return false;
 }
 
+void AppendMeshUvFingerprint(Mesh &mesh, uint64_t *fingerprint) {
+  if (!fingerprint) {
+    return;
+  }
+
+  // UVW Map (and similar) modifiers rewrite mapping without changing vertex
+  // counts, world bounds, or channel-validity intervals (often FOREVER). The
+  // dirty-mesh path only re-exports when geometryFingerprint changes, so UV
+  // data itself must participate in the fingerprint or engine UVs go stale.
+  auto hashUvVert = [&](const UVVert &uv) {
+    *fingerprint = HashCombine(*fingerprint, HashFloat(uv.x));
+    *fingerprint = HashCombine(*fingerprint, HashFloat(uv.y));
+    *fingerprint = HashCombine(*fingerprint, HashFloat(uv.z));
+  };
+
+  // Legacy channel-1 arrays — this is what mesh export currently ships.
+  const int tVertCount = mesh.getNumTVerts();
+  *fingerprint =
+      HashCombine(*fingerprint, static_cast<uint64_t>((std::max)(tVertCount, 0)));
+  if (tVertCount > 0 && mesh.tVerts) {
+    for (int i = 0; i < tVertCount; ++i) {
+      hashUvVert(mesh.tVerts[i]);
+    }
+  }
+  if (mesh.tvFace && mesh.getNumFaces() > 0) {
+    for (int faceIndex = 0; faceIndex < mesh.getNumFaces(); ++faceIndex) {
+      const TVFace &tvFace = mesh.tvFace[faceIndex];
+      *fingerprint =
+          HashCombine(*fingerprint, static_cast<uint64_t>(tvFace.t[0]));
+      *fingerprint =
+          HashCombine(*fingerprint, static_cast<uint64_t>(tvFace.t[1]));
+      *fingerprint =
+          HashCombine(*fingerprint, static_cast<uint64_t>(tvFace.t[2]));
+    }
+  }
+
+  // Additional map channels (2+). Channel 0 is often vertex color; still
+  // fingerprint supported channels so extra UV sets are not ignored.
+  const int numMaps = mesh.getNumMaps();
+  *fingerprint =
+      HashCombine(*fingerprint, static_cast<uint64_t>((std::max)(numMaps, 0)));
+  for (int mapChannel = 0; mapChannel < numMaps; ++mapChannel) {
+    if (!mesh.mapSupport(mapChannel)) {
+      continue;
+    }
+    // Mesh::Map() returns const MeshMap&; MeshMap::getNumVerts/Faces are
+    // non-const in the Max SDK, so read the public counts directly.
+    const MeshMap &map = mesh.Map(mapChannel);
+    const int mapVertCount = map.vnum;
+    const int mapFaceCount = map.fnum;
+    *fingerprint =
+        HashCombine(*fingerprint, static_cast<uint64_t>(mapChannel));
+    *fingerprint =
+        HashCombine(*fingerprint, static_cast<uint64_t>((std::max)(mapVertCount, 0)));
+    *fingerprint =
+        HashCombine(*fingerprint, static_cast<uint64_t>((std::max)(mapFaceCount, 0)));
+    if (map.tv && mapVertCount > 0) {
+      for (int i = 0; i < mapVertCount; ++i) {
+        hashUvVert(map.tv[i]);
+      }
+    }
+    if (map.tf && mapFaceCount > 0) {
+      for (int faceIndex = 0; faceIndex < mapFaceCount; ++faceIndex) {
+        const TVFace &tvFace = map.tf[faceIndex];
+        *fingerprint =
+            HashCombine(*fingerprint, static_cast<uint64_t>(tvFace.t[0]));
+        *fingerprint =
+            HashCombine(*fingerprint, static_cast<uint64_t>(tvFace.t[1]));
+        *fingerprint =
+            HashCombine(*fingerprint, static_cast<uint64_t>(tvFace.t[2]));
+      }
+    }
+  }
+}
+
 void PopulateSnapshotMeshMetadata(Interface *ip, INode *node, Mesh &mesh,
                                   NodeSnapshot *snapshot) {
   if (!ip || !node || !snapshot) {
@@ -5284,6 +5439,8 @@ void PopulateSnapshotMeshMetadata(Interface *ip, INode *node, Mesh &mesh,
   fingerprint = HashCombine(fingerprint, static_cast<uint64_t>(texmapValid.End()));
   fingerprint =
       HashCombine(fingerprint, static_cast<uint64_t>(node->GetObjectRef() != nullptr));
+
+  AppendMeshUvFingerprint(mesh, &fingerprint);
 
   Mtl *rootMaterial = node->GetMtl();
   if (rootMaterial) {
@@ -9342,6 +9499,14 @@ private:
       }
     }
 
+    std::unordered_map<ULONG_PTR, INode *> dirtyMaterialNodeLookup;
+    const bool needDirtyMaterialLookup =
+        !m_dirtyMaterialHandles.empty() &&
+        m_dirtyMaterialHandles.size() >= 8;
+    if (needDirtyMaterialLookup) {
+      BuildSceneNodeHandleLookup(ip, &dirtyMaterialNodeLookup);
+    }
+
     for (ULONG_PTR handle : m_dirtyMaterialHandles) {
       if (stagedMaterialHandles.find(handle) != stagedMaterialHandles.end()) {
         continue;
@@ -9355,6 +9520,34 @@ private:
         appendTrackedMaterialRemovals(handle, nullptr);
         stageMaterialState(handle, MaterialStateMap{});
         continue;
+      }
+
+      // Material Editor open/enumeration fires MaterialStructured /
+      // MaterialOtherEvent for huge numbers of materials without any actual
+      // edit. Full capture here includes texture bake and was the main reason
+      // "first open of Mat Editor takes ages" while LiveLink was running.
+      // Gate on the cheap fingerprint first; only recapture when it changes.
+      if (snapshot.hasMesh) {
+        INode *materialNode = nullptr;
+        if (needDirtyMaterialLookup) {
+          const auto nodeIt = dirtyMaterialNodeLookup.find(handle);
+          if (nodeIt != dirtyMaterialNodeLookup.end()) {
+            materialNode = nodeIt->second;
+          }
+        } else {
+          materialNode = FindNodeByHandle(ip, handle);
+        }
+        if (materialNode) {
+          const uint64_t fingerprint =
+              ComputeMaterialCheapFingerprint(ip, materialNode);
+          const auto cachedIt =
+              m_materialVerificationFingerprints.find(handle);
+          if (cachedIt != m_materialVerificationFingerprints.end() &&
+              cachedIt->second == fingerprint) {
+            continue;
+          }
+          m_materialVerificationFingerprints[handle] = fingerprint;
+        }
       }
 
       MaterialStateMap materialStateForNode =
