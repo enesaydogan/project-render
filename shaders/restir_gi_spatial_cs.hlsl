@@ -25,10 +25,12 @@ RWTexture2D<float4> g_gi_reservoir_b1 : register(u8);
 RWTexture2D<float4> g_gi_reservoir_b2 : register(u9);
 
 RWTexture2D<float> g_depth : register(u10);
+RWTexture2D<float4> g_albedoOut : register(u12);
 RWTexture2D<float4> g_normalRoughnessOut : register(u13);
 RWTexture2D<float> g_linearDepth : register(u15);
 
 static const uint kGroupSize = 8;
+static const float kPI = 3.14159265359;
 static const uint kTileSize = kGroupSize + 2;
 
 // GI seam-leak guard for escaped samples: an escaped candidate whose radiance
@@ -92,7 +94,7 @@ float3 ReconstructWorldPos(uint2 pix, uint2 dim, float depth)
     return camPos + dir * depth;
 }
 
-float EvalCandidateGiPTarget(GI_Reservoir candidate, float3 N, float3 P)
+float EvalCandidateGiPTarget(GI_Reservoir candidate, float3 N, float3 P, float3 albedo)
 {
     if (candidate.M == 0u || candidate.W <= 0.0 ||
         !any(candidate.radiance > 0.0)) {
@@ -108,7 +110,8 @@ float EvalCandidateGiPTarget(GI_Reservoir candidate, float3 N, float3 P)
     if (NdotL <= 0.0) {
         return 0.0;
     }
-    return length(candidate.radiance * NdotL);
+    float3 brdf = albedo / kPI;
+    return length(max(candidate.radiance * brdf * NdotL, 0.0));
 }
 
 GI_Reservoir unpack_gi_reservoir(float4 d0, float4 d1, float4 d2) {
@@ -266,6 +269,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID,
         return;
     }
 
+    float3 albedo = g_albedoOut[pix].rgb;
     float3 N = SafeNormalize3(centerNormal.xyz, float3(0.0, 1.0, 0.0));
     float3 P = ReconstructWorldPos(pix, dim, centerDepth);
 
@@ -277,7 +281,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID,
         float4 prev2 = s_prevGi2Tile[centerIdx];
         GI_Reservoir prev = unpack_gi_reservoir(prev0, prev1, prev2);
         prev.M = min(prev.M, 15);
-        float p_target = EvalCandidateGiPTarget(prev, N, P);
+        float p_target = EvalCandidateGiPTarget(prev, N, P, albedo);
         combine_gi_reservoirs(res, prev, p_target, rng);
 
         // Spatial reuse from previous frame neighbors.
@@ -300,7 +304,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID,
             float4 d2 = s_prevGi2Tile[idx];
             GI_Reservoir neigh = unpack_gi_reservoir(d0, d1, d2);
             neigh.M = min(neigh.M, 8);
-            float neighPTarget = EvalCandidateGiPTarget(neigh, N, P);
+            float neighPTarget = EvalCandidateGiPTarget(neigh, N, P, albedo);
             combine_gi_reservoirs(res, neigh, neighPTarget, rng);
         }
     }
@@ -370,7 +374,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID,
         }
     }
 
-    float final_p_target = EvalCandidateGiPTarget(res, N, P);
+    float final_p_target = EvalCandidateGiPTarget(res, N, P, albedo);
     finalize_gi_reservoir(res, final_p_target);
     float4 out0, out1, out2;
     pack_gi_reservoir(res, out0, out1, out2);

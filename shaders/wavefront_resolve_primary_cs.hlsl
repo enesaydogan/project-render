@@ -1610,30 +1610,7 @@ inline GI_Reservoir GenerateWavefrontGiCandidate(float3 hitPos,
     float risWeight = min(pTarget / max(pdf, 1.0e-5), 1.0e5);
     update_gi_reservoir(reservoir, candidatePos, radiance, risWeight,
                         escaped ? 1u : 0u, rng);
-    // Merge last frame's (guarded, spatially reused) reservoir for temporal
-    // reuse. Evaluate history candidate target PDF at the current surface.
-    if (giHistory.M > 0u && any(giHistory.radiance > 0.0)) {
-        float3 histVector = giHistory.hitPos - hitPos;
-        float histDistSq = dot(histVector, histVector);
-        if (histDistSq > 1.0e-8) {
-            float3 histDir = histVector * rsqrt(histDistSq);
-            float histNdotL = saturate(dot(normal, histDir));
-            float histPTarget =
-                length(max(giHistory.radiance * brdf * histNdotL, 0.0));
-            combine_gi_reservoirs(reservoir, giHistory, histPTarget, rng);
-        }
-    }
-    // Finalize using the target PDF of the candidate chosen by the reservoir.
-    float3 finalVector = reservoir.hitPos - hitPos;
-    float finalDistSq = dot(finalVector, finalVector);
-    float finalPTarget = 0.0;
-    if (finalDistSq > 1.0e-8) {
-        float3 finalDir = finalVector * rsqrt(finalDistSq);
-        float finalNdotL = saturate(dot(normal, finalDir));
-        finalPTarget =
-            length(max(reservoir.radiance * brdf * finalNdotL, 0.0));
-    }
-    finalize_gi_reservoir(reservoir, finalPTarget);
+    finalize_gi_reservoir(reservoir, pTarget);
     return reservoir;
 }
 
@@ -1655,6 +1632,9 @@ inline float3 EvaluateWavefrontGiReservoirContribution(GI_Reservoir reservoir,
 
     float3 candidateDir = candidateVector * rsqrt(candidateDistanceSq);
     float nDotL = saturate(dot(normal, candidateDir));
+    if (nDotL <= 0.0) {
+        return float3(0.0, 0.0, 0.0);
+    }
     float3 brdf = diffuseAlbedo / PI;
     return max(reservoir.radiance * brdf * nDotL * reservoir.W, 0.0);
 }
@@ -2405,9 +2385,14 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
         giReservoir = GenerateWavefrontGiCandidate(hitPos, normal, geomNormal,
                                                    diffuseAlbedo, giHistory,
                                                    rng);
+        GI_Reservoir displayGi = giReservoir;
+        if (dlssRayReconstruction <= 0.5 && accumulationCount > 0.0 &&
+            giHistory.M > 0u && giHistory.W > 0.0) {
+            displayGi = giHistory;
+        }
         color += state.throughput *
                  EvaluateWavefrontGiReservoirContribution(
-                     giReservoir, hitPos, normal, diffuseAlbedo);
+                     displayGi, hitPos, normal, diffuseAlbedo);
         }
 
         RNG aoRng;

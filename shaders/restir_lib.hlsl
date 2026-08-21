@@ -162,17 +162,17 @@ bool update_gi_reservoir(inout GI_Reservoir r, float3 hitPos, float3 radiance, f
 
 void combine_gi_reservoirs(inout GI_Reservoir r, const GI_Reservoir r_other, float p_target, inout RNG rng)
 {
-    if (r_other.M == 0 || isnan(p_target) || isinf(p_target)) return;
+    if (r_other.M == 0u || r_other.W <= 0.0 || !isfinite(p_target) || p_target <= 0.0) return;
     uint M_orig = r.M;
     float weight = p_target * r_other.W * (float)r_other.M;
     weight = min(weight, 1e7); // Extra safety for combined weight
     update_gi_reservoir(r, r_other.hitPos, r_other.radiance, weight, r_other.escaped, rng);
-    r.M = min(M_orig + r_other.M, 60); // Reduced from 500 for better responsiveness to lighting changes
+    r.M = min(M_orig + r_other.M, 60u); // Reduced from 500 for better responsiveness to lighting changes
 }
 
 void finalize_gi_reservoir(inout GI_Reservoir r, float p_target)
 {
-    if (p_target > 0.0 && r.M > 0) {
+    if (p_target > 1e-6 && r.M > 0u) {
         r.W = r.w_sum / ((float)r.M * p_target);
     } else {
         r.W = 0.0;
