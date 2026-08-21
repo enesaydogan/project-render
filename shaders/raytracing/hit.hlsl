@@ -1258,8 +1258,11 @@ void ClosestHitImpl(inout RayPayload payload,
     Vertex v1 = vertices[vbIndex][i1];
     Vertex v2 = vertices[vbIndex][i2];
     const float3x4 objectToWorld = ObjectToWorld3x4();
-    const float3 worldGeomNormal = WorldGeometricNormalFromObjectVerts(
+    float3 worldGeomNormal = WorldGeometricNormalFromObjectVerts(
         objectToWorld, v0.position, v1.position, v2.position);
+    if (dot(worldGeomNormal, -WorldRayDirection()) < 0.0) {
+        worldGeomNormal = -worldGeomNormal;
+    }
     
     // Interpolate UV
     float2 uv0 = v0.uv;

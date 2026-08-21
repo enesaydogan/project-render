@@ -7,13 +7,15 @@
 // exposing fields this compute pass needs.
 cbuffer Camera : register(b0)
 {
+    float3 camPos : packoffset(c0);
+    float3 camForward : packoffset(c1);
+    float3 camUp : packoffset(c2);
+    float fov : packoffset(c3.x);
+    float aspect : packoffset(c3.y);
     float globalFrameCount : packoffset(c4.y);
     float accumulationCount : packoffset(c5.w);
     float dlssRayReconstruction : packoffset(c10.w);
 }
-
-RWTexture2D<float> g_depth : register(u10);
-RWTexture2D<float4> g_normalRoughnessOut : register(u13);
 
 RWTexture2D<float4> g_gi_reservoir_a0 : register(u4);
 RWTexture2D<float4> g_gi_reservoir_a1 : register(u5);
@@ -21,6 +23,10 @@ RWTexture2D<float4> g_gi_reservoir_a2 : register(u6);
 RWTexture2D<float4> g_gi_reservoir_b0 : register(u7);
 RWTexture2D<float4> g_gi_reservoir_b1 : register(u8);
 RWTexture2D<float4> g_gi_reservoir_b2 : register(u9);
+
+RWTexture2D<float> g_depth : register(u10);
+RWTexture2D<float4> g_normalRoughnessOut : register(u13);
+RWTexture2D<float> g_linearDepth : register(u15);
 
 static const uint kGroupSize = 8;
 static const uint kTileSize = kGroupSize + 2;
@@ -65,6 +71,46 @@ float3 SafeNormalize3(float3 v, float3 fallback)
                                                 : fallback;
 }
 
+float3 ReconstructWorldPos(uint2 pix, uint2 dim, float depth)
+{
+    float2 uv = ((float2)pix + 0.5) / (float2)dim;
+    float2 ndc = uv * 2.0 - 1.0;
+    ndc.y = -ndc.y; // flip Y
+
+    float halfH = tan(fov * 0.5);
+    float halfW = halfH * aspect;
+
+    float3 forward = SafeNormalize3(camForward, float3(0.0, 0.0, 1.0));
+    float3 cameraUp = SafeNormalize3(camUp, float3(0.0, 1.0, 0.0));
+    float3 right = SafeNormalize3(cross(forward, cameraUp),
+                                  float3(1.0, 0.0, 0.0));
+    float3 up = SafeNormalize3(cross(right, forward), cameraUp);
+
+    float3 dir = SafeNormalize3(forward + right * (ndc.x * halfW) +
+                                    up * (ndc.y * halfH),
+                                forward);
+    return camPos + dir * depth;
+}
+
+float EvalCandidateGiPTarget(GI_Reservoir candidate, float3 N, float3 P)
+{
+    if (candidate.M == 0u || candidate.W <= 0.0 ||
+        !any(candidate.radiance > 0.0)) {
+        return 0.0;
+    }
+    float3 candidateVector = candidate.hitPos - P;
+    float distSq = dot(candidateVector, candidateVector);
+    if (distSq <= 1.0e-8) {
+        return 0.0;
+    }
+    float3 L = candidateVector * rsqrt(distSq);
+    float NdotL = saturate(dot(N, L));
+    if (NdotL <= 0.0) {
+        return 0.0;
+    }
+    return length(candidate.radiance * NdotL);
+}
+
 GI_Reservoir unpack_gi_reservoir(float4 d0, float4 d1, float4 d2) {
     GI_Reservoir r;
     r.hitPos = d0.xyz;
@@ -87,7 +133,7 @@ void pack_gi_reservoir(GI_Reservoir r, out float4 d0, out float4 d1, out float4 
 }
 
 bool IsSpatiallyCompatibleData(float4 n0, float d0, float4 n1, float d1,
-                               float ndotMin, float depthTolBase)
+                                float ndotMin, float depthTolBase)
 {
     if (!IsValidSurfaceData(n0, d0) || !IsValidSurfaceData(n1, d1)) {
         return false;
@@ -121,7 +167,7 @@ void LoadSharedSlot(uint2 slot, int2 pix, uint2 dim, bool flip)
     }
 
     uint2 p = uint2(pix);
-    s_depthTile[idx] = g_depth[p];
+    s_depthTile[idx] = g_linearDepth[p];
     s_normalTile[idx] = g_normalRoughnessOut[p];
     if (flip) {
         s_prevGi0Tile[idx] = g_gi_reservoir_b0[p];
@@ -140,7 +186,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID,
             uint3 gid : SV_GroupID)
 {
     uint2 dim;
-    g_depth.GetDimensions(dim.x, dim.y);
+    g_linearDepth.GetDimensions(dim.x, dim.y);
     uint frame = (uint)globalFrameCount;
     bool flip = (frame & 1u) == 1u;
     if (dlssRayReconstruction > 0.5 || dim.x == 0u || dim.y == 0u) return;
@@ -220,6 +266,9 @@ void CSMain(uint3 dtid : SV_DispatchThreadID,
         return;
     }
 
+    float3 N = SafeNormalize3(centerNormal.xyz, float3(0.0, 1.0, 0.0));
+    float3 P = ReconstructWorldPos(pix, dim, centerDepth);
+
     // Temporal reuse from previous ping-pong side.
     if (accumulationCount > 0.0) {
         uint centerIdx = tile_index(sharedCenter);
@@ -228,7 +277,8 @@ void CSMain(uint3 dtid : SV_DispatchThreadID,
         float4 prev2 = s_prevGi2Tile[centerIdx];
         GI_Reservoir prev = unpack_gi_reservoir(prev0, prev1, prev2);
         prev.M = min(prev.M, 15);
-        combine_gi_reservoirs(res, prev, 1.0, rng);
+        float p_target = EvalCandidateGiPTarget(prev, N, P);
+        combine_gi_reservoirs(res, prev, p_target, rng);
 
         // Spatial reuse from previous frame neighbors.
         // Only run if history is valid, otherwise we pull uninitialized neighbor reservoirs!
@@ -250,7 +300,8 @@ void CSMain(uint3 dtid : SV_DispatchThreadID,
             float4 d2 = s_prevGi2Tile[idx];
             GI_Reservoir neigh = unpack_gi_reservoir(d0, d1, d2);
             neigh.M = min(neigh.M, 8);
-            combine_gi_reservoirs(res, neigh, 1.0, rng);
+            float neighPTarget = EvalCandidateGiPTarget(neigh, N, P);
+            combine_gi_reservoirs(res, neigh, neighPTarget, rng);
         }
     }
 
@@ -319,7 +370,8 @@ void CSMain(uint3 dtid : SV_DispatchThreadID,
         }
     }
 
-    finalize_gi_reservoir(res, 1.0);
+    float final_p_target = EvalCandidateGiPTarget(res, N, P);
+    finalize_gi_reservoir(res, final_p_target);
     float4 out0, out1, out2;
     pack_gi_reservoir(res, out0, out1, out2);
     if (flip) {

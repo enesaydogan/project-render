@@ -1124,7 +1124,7 @@ inline float3 WavefrontGiEvaluateBrdfLighting(float3 diffuseAlbedo,
 }
 
 inline float3 EvaluateWavefrontGiSurfaceRadiance(
-    RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> query,
+    RayQuery<RAY_FLAG_NONE> query,
     float3 incomingDirection,
     out float3 surfacePos)
 {
@@ -1192,11 +1192,14 @@ inline float3 EvaluateWavefrontGiSurfaceRadiance(
 
     const float3x4 objectToWorld = query.CommittedObjectToWorld3x4();
     const float3x4 worldToObject = query.CommittedWorldToObject3x4();
-    const float3 geomNormal = WorldGeometricNormalFromObjectVerts(
+    float3 geomNormal = WorldGeometricNormalFromObjectVerts(
         objectToWorld,
         vertices[mesh.vbIndex][i0].position,
         vertices[mesh.vbIndex][i1].position,
         vertices[mesh.vbIndex][i2].position);
+    if (dot(geomNormal, -incomingDirection) < 0.0) {
+        geomNormal = -geomNormal;
+    }
     float3 worldNormal = normalize(mul(localNormal, (float3x3)worldToObject));
     float4 worldTangent;
     worldTangent.xyz = normalize(mul((float3x3)objectToWorld,
@@ -1565,9 +1568,13 @@ inline GI_Reservoir GenerateWavefrontGiCandidate(float3 hitPos,
     giRay.TMin = kSpawnRayTMin;
     giRay.TMax = 10000.0;
 
-    RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> query;
+    RayQuery<RAY_FLAG_NONE> query;
     query.TraceRayInline(g_accel, RAY_FLAG_NONE, 0xFF, giRay);
-    query.Proceed();
+    while (query.Proceed()) {
+        if (query.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE) {
+            query.CommitNonOpaqueTriangleHit();
+        }
+    }
 
     float3 radiance = float3(0.0, 0.0, 0.0);
     float3 candidatePos = hitPos + candidateDir * 1000.0;
@@ -1604,11 +1611,29 @@ inline GI_Reservoir GenerateWavefrontGiCandidate(float3 hitPos,
     update_gi_reservoir(reservoir, candidatePos, radiance, risWeight,
                         escaped ? 1u : 0u, rng);
     // Merge last frame's (guarded, spatially reused) reservoir for temporal
-    // reuse. w_sum units match the fresh candidate; merging BEFORE finalize
-    // keeps the original pTarget normalization so display brightness is
-    // unchanged vs. the pre-reuse path.
-    combine_gi_reservoirs(reservoir, giHistory, 1.0, rng);
-    finalize_gi_reservoir(reservoir, pTarget);
+    // reuse. Evaluate history candidate target PDF at the current surface.
+    if (giHistory.M > 0u && any(giHistory.radiance > 0.0)) {
+        float3 histVector = giHistory.hitPos - hitPos;
+        float histDistSq = dot(histVector, histVector);
+        if (histDistSq > 1.0e-8) {
+            float3 histDir = histVector * rsqrt(histDistSq);
+            float histNdotL = saturate(dot(normal, histDir));
+            float histPTarget =
+                length(max(giHistory.radiance * brdf * histNdotL, 0.0));
+            combine_gi_reservoirs(reservoir, giHistory, histPTarget, rng);
+        }
+    }
+    // Finalize using the target PDF of the candidate chosen by the reservoir.
+    float3 finalVector = reservoir.hitPos - hitPos;
+    float finalDistSq = dot(finalVector, finalVector);
+    float finalPTarget = 0.0;
+    if (finalDistSq > 1.0e-8) {
+        float3 finalDir = finalVector * rsqrt(finalDistSq);
+        float finalNdotL = saturate(dot(normal, finalDir));
+        finalPTarget =
+            length(max(reservoir.radiance * brdf * finalNdotL, 0.0));
+    }
+    finalize_gi_reservoir(reservoir, finalPTarget);
     return reservoir;
 }
 
@@ -1775,8 +1800,11 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             const float3 dbgHitPos = state.origin + rayDir * record.hitT;
             const float3 dbgShadingNormal =
                 UnpackNormalOctahedron(record.packedNormal);
-            const float3 dbgGeomNormal =
+            float3 dbgGeomNormal =
                 UnpackNormalOctahedron(record.packedGeomNormal);
+            if (dot(dbgGeomNormal, -rayDir) < 0.0) {
+                dbgGeomNormal = -dbgGeomNormal;
+            }
             if (dbgMode == 30) {
                 const float3 sunDir = normalize(lightDir.xyz);
                 RayDesc sunRay;
@@ -1788,7 +1816,11 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                 RayQuery<RAY_FLAG_SKIP_CLOSEST_HIT_SHADER |
                          RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> sunQuery;
                 sunQuery.TraceRayInline(g_accel, RAY_FLAG_NONE, 0xFF, sunRay);
-                sunQuery.Proceed();
+                while (sunQuery.Proceed()) {
+                    if (sunQuery.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE) {
+                        sunQuery.CommitNonOpaqueTriangleHit();
+                    }
+                }
                 const bool sunVisible =
                     (sunQuery.CommittedStatus() == COMMITTED_NOTHING);
                 debugColor = sunVisible ? float3(0.0, 1.0, 0.0)
@@ -1799,17 +1831,21 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                     (record.pixelIndex * 0x9E3779B9u) ^
                     (((uint)globalFrameCount + 1u) * 0x85EBCA6Bu) ^
                     0xB5297A4Du;
-                const float3 giDir =
-                    BuildDiffuseContinuation(dbgShadingNormal, dbgRng);
+                const float3 giDir = ClampDirectionToGeomHemisphere(
+                    BuildDiffuseContinuation(dbgShadingNormal, dbgRng), dbgGeomNormal);
                 RayDesc giRay;
                 giRay.Origin =
                     SpawnRayOrigin(dbgHitPos, dbgGeomNormal, giDir);
                 giRay.Direction = giDir;
                 giRay.TMin = kSpawnRayTMin;
                 giRay.TMax = 10000.0;
-                RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> giQuery;
+                RayQuery<RAY_FLAG_NONE> giQuery;
                 giQuery.TraceRayInline(g_accel, RAY_FLAG_NONE, 0xFF, giRay);
-                giQuery.Proceed();
+                while (giQuery.Proceed()) {
+                    if (giQuery.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE) {
+                        giQuery.CommitNonOpaqueTriangleHit();
+                    }
+                }
                 if (dbgMode == 31) {
                     // GI radiance: escaped = bright env, hit = dark proximity
                     // so bright pixels unambiguously mean "escaped to the sky".
@@ -1886,6 +1922,9 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
         float3 hitPos = state.origin + rayDir * record.hitT;
         normal = UnpackNormalOctahedron(record.packedNormal);
         float3 geomNormal = UnpackNormalOctahedron(record.packedGeomNormal);
+        if (dot(geomNormal, -rayDir) < 0.0) {
+            geomNormal = -geomNormal;
+        }
         albedo = UnpackPayloadAlbedo(record.packedAlbedo);
         float4 surface = WavefrontHitRecordSurface(record);
         roughness = saturate(surface.x);
@@ -1944,10 +1983,14 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                 specProbe.Direction = mirrorDir;
                 specProbe.TMin = kSpawnRayTMin;
                 specProbe.TMax = 10000.0;
-                RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> specQuery;
+                RayQuery<RAY_FLAG_NONE> specQuery;
                 specQuery.TraceRayInline(g_accel, RAY_FLAG_NONE, 0xFF,
                                          specProbe);
-                specQuery.Proceed();
+                while (specQuery.Proceed()) {
+                    if (specQuery.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE) {
+                        specQuery.CommitNonOpaqueTriangleHit();
+                    }
+                }
                 if (specQuery.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
                     rrSpecHitDistance = specQuery.CommittedRayT();
                     float3 reflectedPos =
@@ -2490,11 +2533,14 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                     guideSpecProbe.Direction = guideMirror;
                     guideSpecProbe.TMin = kSpawnRayTMin;
                     guideSpecProbe.TMax = 10000.0;
-                    RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH>
-                        guideSpecQuery;
+                    RayQuery<RAY_FLAG_NONE> guideSpecQuery;
                     guideSpecQuery.TraceRayInline(g_accel, RAY_FLAG_NONE,
                                                   0xFF, guideSpecProbe);
-                    guideSpecQuery.Proceed();
+                    while (guideSpecQuery.Proceed()) {
+                        if (guideSpecQuery.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE) {
+                            guideSpecQuery.CommitNonOpaqueTriangleHit();
+                        }
+                    }
                     if (guideSpecQuery.CommittedStatus() ==
                         COMMITTED_TRIANGLE_HIT) {
                         rrSpecHitDistance = guideSpecQuery.CommittedRayT();

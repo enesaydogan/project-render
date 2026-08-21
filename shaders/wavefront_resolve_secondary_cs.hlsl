@@ -231,6 +231,9 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
         float3 hitPos = state.origin + rayDir * record.hitT;
         float3 normal = UnpackNormalOctahedron(record.packedNormal);
         float3 geomNormal = UnpackNormalOctahedron(record.packedGeomNormal);
+        if (dot(geomNormal, -rayDir) < 0.0) {
+            geomNormal = -geomNormal;
+        }
         float3 albedo = UnpackPayloadAlbedo(record.packedAlbedo);
         float4 surface = WavefrontHitRecordSurface(record);
         float roughness = saturate(surface.x);

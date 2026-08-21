@@ -1608,10 +1608,10 @@ static void EnsureRestirGiSpatialPipeline() {
 
   // Root signature:
   //  - b0: Camera constants
-  //  - UAV table: u4..u13 (GI reservoirs + depth/normal compatibility data)
+  //  - UAV table: u4..u15 (GI reservoirs + depth/normal + linear depth data)
   D3D12_DESCRIPTOR_RANGE uavRange = {};
   uavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-  uavRange.NumDescriptors = 10; // u4..u13
+  uavRange.NumDescriptors = 12; // u4..u15
   uavRange.BaseShaderRegister = 4;
   uavRange.RegisterSpace = 0;
   uavRange.OffsetInDescriptorsFromTableStart =
