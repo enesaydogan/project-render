@@ -15,6 +15,8 @@ cbuffer Camera : register(b0)
     float globalFrameCount : packoffset(c4.y);
     float accumulationCount : packoffset(c5.w);
     float dlssRayReconstruction : packoffset(c10.w);
+    float verticalTiltCorrection : packoffset(c11.x);
+    float projectionMode : packoffset(c11.y);
 }
 
 RWTexture2D<float4> g_gi_reservoir_a0 : register(u4);
@@ -73,25 +75,57 @@ float3 SafeNormalize3(float3 v, float3 fallback)
                                                 : fallback;
 }
 
-float3 ReconstructWorldPos(uint2 pix, uint2 dim, float depth)
+inline void BuildPerspectiveCameraBasis(float3 inputForward, float3 inputUp,
+                                        float enableVerticalCorrection,
+                                        out float3 projectionForward,
+                                        out float3 projectionRight,
+                                        out float3 projectionUp,
+                                        out float verticalCenterShift)
 {
-    float2 uv = ((float2)pix + 0.5) / (float2)dim;
+    float3 forwardDir = SafeNormalize3(inputForward, float3(0.0, 0.0, 1.0));
+    projectionRight = SafeNormalize3(cross(forwardDir, inputUp), float3(1.0, 0.0, 0.0));
+    projectionUp = SafeNormalize3(cross(projectionRight, forwardDir), float3(0.0, 1.0, 0.0));
+    projectionForward = forwardDir;
+    verticalCenterShift = 0.0;
+
+    if (enableVerticalCorrection <= 0.5) {
+        return;
+    }
+
+    const float3 worldUp = float3(0.0, 1.0, 0.0);
+    float3 levelForward = forwardDir - worldUp * dot(forwardDir, worldUp);
+    float levelLengthSq = dot(levelForward, levelForward);
+    if (levelLengthSq <= 1.0e-6) {
+        return;
+    }
+
+    projectionForward = levelForward * rsqrt(levelLengthSq);
+    projectionRight = SafeNormalize3(cross(projectionForward, worldUp), float3(1.0, 0.0, 0.0));
+    projectionUp = SafeNormalize3(cross(projectionRight, projectionForward), float3(0.0, 1.0, 0.0));
+    verticalCenterShift =
+        clamp(dot(forwardDir, projectionUp) /
+                  max(dot(forwardDir, projectionForward), 0.025),
+              -40.0, 40.0);
+}
+
+float3 ReconstructWorldPos(uint2 pix, uint2 dim, float viewZ)
+{
+    float2 uv = (float2(pix) + 0.5) / float2(dim);
     float2 ndc = uv * 2.0 - 1.0;
-    ndc.y = -ndc.y; // flip Y
 
-    float halfH = tan(fov * 0.5);
-    float halfW = halfH * aspect;
+    float3 forwardDir;
+    float3 projectionRight;
+    float3 projectionUp;
+    float projectionVerticalShift;
+    BuildPerspectiveCameraBasis(camForward, camUp, verticalTiltCorrection,
+                                forwardDir, projectionRight, projectionUp,
+                                projectionVerticalShift);
 
-    float3 forward = SafeNormalize3(camForward, float3(0.0, 0.0, 1.0));
-    float3 cameraUp = SafeNormalize3(camUp, float3(0.0, 1.0, 0.0));
-    float3 right = SafeNormalize3(cross(forward, cameraUp),
-                                  float3(1.0, 0.0, 0.0));
-    float3 up = SafeNormalize3(cross(right, forward), cameraUp);
-
-    float3 dir = SafeNormalize3(forward + right * (ndc.x * halfW) +
-                                    up * (ndc.y * halfH),
-                                forward);
-    return camPos + dir * depth;
+    float fInv = tan(radians(fov) * 0.5);
+    float xView = ndc.x * aspect * fInv;
+    float yView = (-ndc.y) * fInv + projectionVerticalShift;
+    float3 rayDirUnnormalized = xView * projectionRight + yView * projectionUp + forwardDir;
+    return camPos + rayDirUnnormalized * viewZ;
 }
 
 float EvalCandidateGiPTarget(GI_Reservoir candidate, float3 N, float3 P, float3 albedo)
