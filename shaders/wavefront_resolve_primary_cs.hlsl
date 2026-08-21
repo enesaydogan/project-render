@@ -1503,6 +1503,13 @@ inline GI_Reservoir GenerateWavefrontGiCandidate(float3 hitPos,
     if (query.CommittedStatus() == COMMITTED_NOTHING) {
         radiance = WavefrontEvaluateIndirectEnvironmentRadiance(candidateDir,
                                                                 candidatePos);
+        // Cap the escaped environment so a GI ray threading a corner hole
+        // cannot inject the full sun disk; sky through real windows (well
+        // under the clamp) is unaffected. Same value as the sun-at-bounce
+        // clamp in EvaluateWavefrontGiSurfaceRadiance.
+        radiance = min(radiance, float3(kGiSecondarySunClamp,
+                                        kGiSecondarySunClamp,
+                                        kGiSecondarySunClamp));
     } else if (query.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
         radiance = EvaluateWavefrontGiSurfaceRadiance(query, candidateDir,
                                                       candidatePos);

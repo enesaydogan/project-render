@@ -1491,8 +1491,13 @@ inline float3 WavefrontEvaluateShadowTaskRadiance(uint packedLightIndex,
 {
     const uint lightType = WavefrontGetLightSampleType(packedLightIndex);
     if (lightType == WAVEFRONT_LIGHT_SAMPLE_ENV) {
-        return WavefrontEvaluateIndirectEnvironmentRadiance(direction,
-                                                           surfacePos);
+        float3 env = WavefrontEvaluateIndirectEnvironmentRadiance(direction,
+                                                                 surfacePos);
+        // Cap the environment NEE so a shadow ray threading a corner hole
+        // cannot inject the sun disk; sky through real windows is unaffected.
+        return min(env, float3(kGiSecondarySunClamp,
+                               kGiSecondarySunClamp,
+                               kGiSecondarySunClamp));
     }
     return float3(0.0, 0.0, 0.0);
 }

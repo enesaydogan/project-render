@@ -217,6 +217,11 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
         float3 missRadiance = WavefrontHitRecordGetColor(record);
         if (WavefrontGetPathRayType(state.packedState) == RAY_TYPE_DIFFUSE) {
             missRadiance *= GetDxrIndirectIblBoost();
+            // Cap escaped diffuse rays so a ray threading a corner hole cannot
+            // inject the full sun disk; sky through real windows is unaffected.
+            missRadiance = min(missRadiance, float3(kGiSecondarySunClamp,
+                                                    kGiSecondarySunClamp,
+                                                    kGiSecondarySunClamp));
         }
         contribution = max(state.throughput, 0.0) * missRadiance;
         uint previousValue = 0u;
@@ -390,6 +395,11 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             WavefrontPackLightSampleMetadata(WAVEFRONT_LIGHT_SAMPLE_DIRECTIONAL, 0u);
         if (WavefrontDirectionalLightActive()) {
             explicitSunSample = WavefrontSampleDirectionalLight(1.0);
+            // V-Ray-style secondary clamp: the sun at a secondary (bounce) hit
+            // must not blow out through a corner hole. The primary direct sun
+            // stays full; only secondary-ray sun is capped.
+            explicitSunSample.radiance =
+                min(explicitSunSample.radiance, kGiSecondarySunClamp);
         }
         uint bounceDepth = WavefrontGetSpecularBounceCount(state.packedState) +
                            WavefrontGetRefractiveBounceCount(state.packedState) +
