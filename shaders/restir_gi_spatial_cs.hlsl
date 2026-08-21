@@ -25,6 +25,17 @@ RWTexture2D<float4> g_gi_reservoir_b2 : register(u9);
 static const uint kGroupSize = 8;
 static const uint kTileSize = kGroupSize + 2;
 
+// GI seam-leak guard for escaped samples: an escaped candidate whose radiance
+// exceeds the brightest compatible neighbor by more than this factor is a ray
+// that threaded a seam to the sun. Adopt the brightest compatible neighbor
+// reservoir (window light is neighborhood-consistent and passes through).
+// The factor matches kGiEscapeHistoryFactor so the two clamps converge
+// instead of ratcheting. Surface bounces are never touched. This keeps
+// HISTORY sane so primary resolve's temporal-relative guard has a
+// trustworthy reference.
+static const float kGiEscapeNeighborFactor = 2.0;
+static const float kGiSpatialClampFloor = 0.02;
+
 groupshared float  s_depthTile[kTileSize * kTileSize];
 groupshared float4 s_normalTile[kTileSize * kTileSize];
 groupshared float4 s_prevGi0Tile[kTileSize * kTileSize];
@@ -61,6 +72,7 @@ GI_Reservoir unpack_gi_reservoir(float4 d0, float4 d1, float4 d2) {
     r.w_sum = d2.x;
     r.M = asuint(d2.y);
     r.W = d2.z;
+    r.escaped = asuint(d2.w);
     if (!all(isfinite(r.hitPos))) r.hitPos = float3(0.0, 0.0, 0.0);
     if (!all(isfinite(r.radiance))) r.radiance = float3(0.0, 0.0, 0.0);
     if (!isfinite(r.w_sum) || r.w_sum < 0.0) r.w_sum = 0.0;
@@ -71,7 +83,7 @@ GI_Reservoir unpack_gi_reservoir(float4 d0, float4 d1, float4 d2) {
 void pack_gi_reservoir(GI_Reservoir r, out float4 d0, out float4 d1, out float4 d2) {
     d0 = float4(r.hitPos, 0.0);
     d1 = float4(r.radiance, 0.0);
-    d2 = float4(r.w_sum, asfloat(r.M), r.W, 0.0);
+    d2 = float4(r.w_sum, asfloat(r.M), r.W, asfloat(r.escaped));
 }
 
 bool IsSpatiallyCompatibleData(float4 n0, float d0, float4 n1, float d1,
@@ -239,6 +251,71 @@ void CSMain(uint3 dtid : SV_DispatchThreadID,
             GI_Reservoir neigh = unpack_gi_reservoir(d0, d1, d2);
             neigh.M = min(neigh.M, 8);
             combine_gi_reservoirs(res, neigh, 1.0, rng);
+        }
+    }
+
+    // GI seam-leak guard. Runs only while accumulation is active (static
+    // camera) so stale neighbor reservoirs from a previous camera pose are
+    // never adopted. Applies only to ESCAPED samples: a surface bounce that
+    // dwarfs its neighbors is legit color bleeding and is left alone. An
+    // escaped sample whose radiance exceeds the brightest compatible
+    // neighbor by more than kGiEscapeNeighborFactor is a ray that threaded
+    // a seam to the sun — adopt the brightest neighbor reservoir so the
+    // leak pixel inherits a sane sample with consistent weights.
+    if (accumulationCount > 0.0 && res.escaped != 0u) {
+        static const int2 kGuardOffsets[4] = {
+            int2(-1, 0), int2(1, 0), int2(0, -1), int2(0, 1)
+        };
+        uint nbhCount = 0u;
+        GI_Reservoir nbhByPeak[4] = {
+            (GI_Reservoir)0, (GI_Reservoir)0, (GI_Reservoir)0, (GI_Reservoir)0
+        };
+        float nbhPeak[4] = { 0.0, 0.0, 0.0, 0.0 };
+        [unroll]
+        for (uint i = 0; i < 4; ++i) {
+            uint2 sN = uint2(int2(sharedCenter) + kGuardOffsets[i]);
+            if (!IsSpatiallyCompatibleData(centerNormal, centerDepth,
+                                           s_normalTile[tile_index(sN)],
+                                           s_depthTile[tile_index(sN)],
+                                           0.94, 0.010)) {
+                continue;
+            }
+            uint idx = tile_index(sN);
+            GI_Reservoir neigh = unpack_gi_reservoir(s_prevGi0Tile[idx],
+                                                     s_prevGi1Tile[idx],
+                                                     s_prevGi2Tile[idx]);
+            if (neigh.M == 0u || !any(neigh.radiance > 0.0)) {
+                continue;
+            }
+            neigh.M = min(neigh.M, 8);
+            float peak = max(neigh.radiance.r,
+                             max(neigh.radiance.g, neigh.radiance.b));
+            // Insertion into a tiny array kept sorted by ascending peak.
+            nbhByPeak[nbhCount] = neigh;
+            nbhPeak[nbhCount] = peak;
+            for (uint j = nbhCount; j > 0u; --j) {
+                if (nbhPeak[j] < nbhPeak[j - 1u]) {
+                    float tmpPeak = nbhPeak[j - 1u];
+                    nbhPeak[j - 1u] = nbhPeak[j];
+                    nbhPeak[j] = tmpPeak;
+                    GI_Reservoir tmpRes = nbhByPeak[j - 1u];
+                    nbhByPeak[j - 1u] = nbhByPeak[j];
+                    nbhByPeak[j] = tmpRes;
+                } else {
+                    break;
+                }
+            }
+            nbhCount++;
+        }
+        if (nbhCount >= 2u) {
+            float curPeak = max(res.radiance.r,
+                                max(res.radiance.g, res.radiance.b));
+            uint maxIdx = nbhCount - 1u;
+            float limit = kGiEscapeNeighborFactor *
+                          max(nbhPeak[maxIdx], kGiSpatialClampFloor);
+            if (curPeak > limit) {
+                res = nbhByPeak[maxIdx];
+            }
         }
     }
 

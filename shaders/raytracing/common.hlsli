@@ -795,15 +795,31 @@ inline float3 UnpackNormalOctahedron(uint packed)
 // primitive, so TMin only has to cover residual ulp error.
 static const float kSpawnRayTMin = 1.0e-5f;
 
-// V-Ray-style "clamp secondary rays" equivalent, applied to the sun's
-// contribution at GI bounce surfaces. A GI-bounce ray that threads a hole in
-// non-watertight arch-viz geometry can inject the full sun disk here as a
-// bright blob; clamping caps that blowout while keeping the color-bleeding
-// tint (sun on a green carpet still radiates green). This only caps the sun
-// at bounce surfaces — it does NOT dim window/environment GI. Tunable: lower
-// = less leak (dimmer indirect sun), higher = brighter color bleeding (more
-// visible leak through model gaps).
+// V-Ray-style "clamp secondary rays" equivalent. A secondary (GI bounce,
+// shadow-NEE, or env-escape) ray that threads a hole in non-watertight
+// arch-viz geometry can inject the full sun disk (~100k radiance) as a
+// bright blob; capping its contribution kills that blowout while keeping the
+// color-bleeding tint (sun on a green carpet still radiates green). Sky
+// through real windows sits well under the cap, so window GI is unaffected.
+// Tunable: lower = less leak (dimmer indirect sun), higher = brighter color
+// bleeding (more visible leak through model gaps).
 static const float kGiSecondarySunClamp = 1000.0f;
+
+// Hue-preserving cap for secondary-ray radiance. Values at or below the cap
+// pass through unchanged (keeps the approved leak/bleed balance); values
+// above are scaled down by luminance so the tint is kept exactly — a
+// per-channel min() would skew the hue when only one channel exceeds the
+// cap. Apply this to RAW environment radiance BEFORE the IBL boost so a
+// raised boost scales the cap with everything else instead of pushing
+// window sky over the clamp.
+inline float3 WavefrontClampSecondaryRadiance(float3 radiance)
+{
+    float peak = max(radiance.r, max(radiance.g, radiance.b));
+    if (peak <= kGiSecondarySunClamp) {
+        return radiance;
+    }
+    return radiance * (kGiSecondarySunClamp / max(peak, 1.0e-8));
+}
 
 // Wächter and Binder, "A Fast and Robust Method for Avoiding Self-Intersection",
 // JCGT 6(1), 2017. Scale-independent integer offset along the geometric normal.
@@ -854,6 +870,26 @@ inline float3 SpawnRayOrigin(float3 p, float3 geomNormal, float3 direction)
         n = -n;
     }
     return OffsetRayOrigin(p, n);
+}
+
+// Normal maps on flat arch-viz walls bend the shading normal off the
+// geometric plane. A cosine sample around the shading normal can then point
+// BELOW the actual polygon surface (dot(D, Ng) < 0) and escape through the
+// wall into the exterior sky/sun. Mirror such directions back across the
+// geometric plane — GI samples must stay on the geometric hemisphere the
+// way V-Ray keeps them.
+inline float3 ClampDirectionToGeomHemisphere(float3 dir, float3 geomNormal)
+{
+    float nLenSq = dot(geomNormal, geomNormal);
+    if (nLenSq <= 1.0e-12) {
+        return dir;
+    }
+    float3 ng = geomNormal * rsqrt(nLenSq);
+    float d = dot(dir, ng);
+    if (d < 0.0) {
+        return dir - 2.0 * d * ng;
+    }
+    return dir;
 }
 
 inline float SpawnRayTMax(float maxDistance)
@@ -1453,13 +1489,47 @@ inline WavefrontLightSample WavefrontSampleDirectLight(float3 surfacePos,
     return WavefrontSampleDirectLight(sampler, surfacePos, rng);
 }
 
+// The sun is an analytic directional light evaluated with shadow-tested DI.
+// Indirect rays (GI escapes, env NEE, secondary diffuse misses) must never
+// sample it from the environment map: a GI ray threading a seam in
+// non-watertight arch-viz geometry would otherwise pick up the full sun disc
+// (~100k radiance) baked into the HDRI/procedural env. Push directions inside
+// the sun disc out to the disc edge (sky there is bright and plausible), so
+// escaped GI rays get sky, not sun — the same sun/GI separation V-Ray keeps.
+inline float3 MaskSunDiscFromEnvDirection(float3 dir)
+{
+    float3 d = normalize(dir);
+    if (!WavefrontDirectionalLightActive() || lightDir.w <= 0.0) {
+        return d;
+    }
+    float3 sunDir = normalize(lightDir.xyz);
+    float cosSunRadius = cos(lightDir.w);
+    float cosTheta = dot(d, sunDir);
+    if (cosTheta <= cosSunRadius) {
+        return d;
+    }
+    float3 perp = d - cosTheta * sunDir;
+    float perpLenSq = dot(perp, perp);
+    float sinSunRadius = sqrt(max(1.0 - cosSunRadius * cosSunRadius, 0.0));
+    if (perpLenSq > 1.0e-8) {
+        return normalize(sunDir * cosSunRadius +
+                         normalize(perp) * sinSunRadius);
+    }
+    float3 ortho = abs(sunDir.y) < 0.99
+        ? normalize(cross(sunDir, float3(0.0, 1.0, 0.0)))
+        : float3(1.0, 0.0, 0.0);
+    return normalize(sunDir * cosSunRadius + ortho * sinSunRadius);
+}
+
 inline float3 WavefrontEvaluateEnvironmentRadiance(float3 direction,
                                                    float3 surfacePos)
 {
     float pathDistance = max(length(surfacePos - camPos), 1.0e-3);
     float envLod = clamp(log2(pathDistance * 0.02) + 0.35, 0.0, 10.0);
     float cloudLod = min(10.0, envLod + 0.5);
-    float2 uv = DirectionToUVRotated(normalize(direction));
+    // Indirect env samples must be sky-only (sun is shadow-tested DI).
+    float3 sampleDir = MaskSunDiscFromEnvDirection(direction);
+    float2 uv = DirectionToUVRotated(sampleDir);
     float3 color = envMap.SampleLevel(linearSampler, uv, envLod).rgb *
                    GetDxrProceduralSkyBoost();
 
@@ -1481,7 +1551,12 @@ inline float3 WavefrontEvaluateEnvironmentRadiance(float3 direction,
 inline float3 WavefrontEvaluateIndirectEnvironmentRadiance(float3 direction,
                                                            float3 surfacePos)
 {
-    return WavefrontEvaluateEnvironmentRadiance(direction, surfacePos) *
+    // Clamp the RAW environment before the IBL boost: the cap kills the sun
+    // disk injected through corner holes, and because it runs pre-boost the
+    // user's IBL boost can never push real window sky over the clamp (a
+    // post-boost cap would dim window GI whenever the boost is > 1).
+    return WavefrontClampSecondaryRadiance(
+               WavefrontEvaluateEnvironmentRadiance(direction, surfacePos)) *
            GetDxrIndirectIblBoost();
 }
 
@@ -1491,13 +1566,12 @@ inline float3 WavefrontEvaluateShadowTaskRadiance(uint packedLightIndex,
 {
     const uint lightType = WavefrontGetLightSampleType(packedLightIndex);
     if (lightType == WAVEFRONT_LIGHT_SAMPLE_ENV) {
-        float3 env = WavefrontEvaluateIndirectEnvironmentRadiance(direction,
-                                                                 surfacePos);
-        // Cap the environment NEE so a shadow ray threading a corner hole
-        // cannot inject the sun disk; sky through real windows is unaffected.
-        return min(env, float3(kGiSecondarySunClamp,
-                               kGiSecondarySunClamp,
-                               kGiSecondarySunClamp));
+        // The secondary clamp is baked into
+        // WavefrontEvaluateIndirectEnvironmentRadiance (raw env, pre-boost),
+        // so an env shadow ray threading a corner hole cannot inject the sun
+        // disk while real window sky stays untouched.
+        return WavefrontEvaluateIndirectEnvironmentRadiance(direction,
+                                                            surfacePos);
     }
     return float3(0.0, 0.0, 0.0);
 }

@@ -53,7 +53,9 @@ PSInputMesh VSMainMesh(VSInputMesh input)
     // Build camera basis to match raygen math. Use a robust reference up
     // vector when the forward vector is nearly parallel to the provided up
     // vector to avoid a zero-length cross product.
-    float f = tan(radians(fov) * 0.5);
+    float f = 1.0f / tan(radians(fov) * 0.5f);
+    float A = farZ / (farZ - nearZ);
+    float B = -nearZ * farZ / (farZ - nearZ);
     float3 refUp = abs(camForward.y) > 0.999f ? float3(0.0f, 0.0f, 1.0f) : float3(0.0f, 1.0f, 0.0f);
     float3 R = cross(camForward, refUp);
     R = normalize(R);
@@ -65,9 +67,11 @@ PSInputMesh VSMainMesh(VSInputMesh input)
     float y_cam = dot(rel, U);
     float z_cam = dot(rel, camForward);
 
-    // Construct clip-space position where w = z_cam, so after perspective divide
-    // NDC.x = x_cam / (z_cam * aspect * f), NDC.y = -y_cam / (z_cam * f)
-    o.position = float4(x_cam / (aspect * f), -y_cam / f, z_cam, z_cam);
+    // Standard D3D perspective. The previous form used w = z_cam with
+    // z = z_cam, which collapses NDC depth to 1.0 for every vertex, plus an
+    // inverted focal term.
+    o.position = float4(x_cam * f / aspect, -y_cam * f,
+                        z_cam * A + B, z_cam);
 
     o.worldPos = pos;
     o.normal = input.normal;

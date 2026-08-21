@@ -121,6 +121,10 @@ struct GI_Reservoir
     float w_sum;
     uint M;
     float W; // Final weight
+    // 1 if the stored sample's GI ray escaped to the environment. Travels
+    // with the selected sample so the spatial pass can treat escaped
+    // candidates (possible seam leaks) differently from surface bounces.
+    uint escaped;
 };
 
 GI_Reservoir init_gi_reservoir()
@@ -131,10 +135,11 @@ GI_Reservoir init_gi_reservoir()
     r.w_sum = 0.0;
     r.M = 0;
     r.W = 0.0;
+    r.escaped = 0u;
     return r;
 }
 
-bool update_gi_reservoir(inout GI_Reservoir r, float3 hitPos, float3 radiance, float weight, inout RNG rng)
+bool update_gi_reservoir(inout GI_Reservoir r, float3 hitPos, float3 radiance, float weight, uint escaped, inout RNG rng)
 {
     // Clamp extreme weights to prevent fireflies from dominating local neighborhoods
     if (!isfinite(weight) || weight < 0.0) return false;
@@ -147,6 +152,7 @@ bool update_gi_reservoir(inout GI_Reservoir r, float3 hitPos, float3 radiance, f
     if (selected) {
         r.hitPos = hitPos;
         r.radiance = radiance;
+        r.escaped = escaped;
     }
     r.w_sum = new_w_sum;
     if (r.w_sum > 1e15) r.w_sum = 1e15;
@@ -160,7 +166,7 @@ void combine_gi_reservoirs(inout GI_Reservoir r, const GI_Reservoir r_other, flo
     uint M_orig = r.M;
     float weight = p_target * r_other.W * (float)r_other.M;
     weight = min(weight, 1e7); // Extra safety for combined weight
-    update_gi_reservoir(r, r_other.hitPos, r_other.radiance, weight, rng);
+    update_gi_reservoir(r, r_other.hitPos, r_other.radiance, weight, r_other.escaped, rng);
     r.M = min(M_orig + r_other.M, 60); // Reduced from 500 for better responsiveness to lighting changes
 }
 

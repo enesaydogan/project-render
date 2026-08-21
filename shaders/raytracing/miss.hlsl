@@ -19,7 +19,13 @@ void Miss(inout RayPayload payload)
 {
     float3 dir = WorldRayDirection();
     uint rayType = UnpackPayloadRayType(payload.packedIorType);
-    float2 uv = DirectionToUVRotated(dir);
+    // Diffuse/GI-eval rays are indirect transport: their misses must not see
+    // the sun (analytic light handled by shadow-tested DI), otherwise a ray
+    // threading a seam injects the sun disc baked into the env map.
+    const bool isIndirectEnvRay =
+        (rayType == RAY_TYPE_DIFFUSE || rayType == RAY_TYPE_GI_EVAL);
+    float3 envDir = isIndirectEnvRay ? MaskSunDiscFromEnvDirection(dir) : dir;
+    float2 uv = DirectionToUVRotated(envDir);
 
     // Keep direct camera view and transmission-through-glass view aligned so
     // sky/cloud appearance does not shift when looking through windows.
@@ -39,8 +45,12 @@ void Miss(inout RayPayload payload)
     float cosSunRadius = cos(lightDir.w);
 
     // Do not add sun disc for rays that already use Next Event Estimation (NEE)
-    // to avoid double-counting the sun.
-    bool useNEE = (rayType == RAY_TYPE_DIFFUSE || rayType == RAY_TYPE_REFLECTION || rayType == RAY_TYPE_REFRACTION);
+    // to avoid double-counting the sun. GI-eval rays are indirect GI escapes:
+    // sky only, never the sun.
+    bool useNEE = (rayType == RAY_TYPE_DIFFUSE ||
+                   rayType == RAY_TYPE_REFLECTION ||
+                   rayType == RAY_TYPE_REFRACTION ||
+                   rayType == RAY_TYPE_GI_EVAL);
     if (cosTheta > cosSunRadius && !useNEE) {
          // Physically correct sun radiance = Illuminance (Lux) / Solid Angle (sr)
          // Omega = 2 * PI * (1 - cos(theta))
@@ -61,7 +71,7 @@ void Miss(inout RayPayload payload)
         int dbg = (int)SHADER_DEBUG_MODE;
         bool cloudDebugView = (dbg >= 11 && dbg <= 16);
         
-        float2 skyUv = DirectionToUVRotated(dir);
+        float2 skyUv = DirectionToUVRotated(envDir);
         float4 baked = bakedClouds.SampleLevel(linearSampler, skyUv, cloudLod);
         baked.a = saturate(baked.a);
         baked.rgb = max(baked.rgb, 0.0);

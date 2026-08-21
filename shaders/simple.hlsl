@@ -63,7 +63,12 @@ struct PSInputMeshSimple { float4 position : SV_POSITION; };
 PSInputMeshSimple VSMainMeshSimple(VSInputMeshSimple input)
 {
     PSInputMeshSimple o;
-    float f = tan(radians(fov) * 0.5);
+    // Match VSMain's standard D3D perspective projection. The previous form
+    // used w = z_cam with z = z_cam (NDC depth collapsed to 1.0 for every
+    // vertex) plus an inverted focal term.
+    float f = 1.0f / tan(radians(fov) * 0.5f);
+    float A = farZ / (farZ - nearZ);
+    float B = -nearZ * farZ / (farZ - nearZ);
 
     float3 R = normalize(cross(forward, up));
     float3 U = normalize(cross(R, forward));
@@ -73,7 +78,8 @@ PSInputMeshSimple VSMainMeshSimple(VSInputMeshSimple input)
     float y_cam = dot(rel, U);
     float z_cam = dot(rel, forward);
 
-    o.position = float4(x_cam / (aspect * f), -y_cam / f, z_cam, z_cam);
+    o.position = float4(x_cam * f / aspect, -y_cam * f,
+                        z_cam * A + B, z_cam);
     return o;
 }
 

@@ -77,7 +77,7 @@ inline void StoreWavefrontGiReservoir(uint2 pixel, GI_Reservoir reservoir)
     float4 out0 = float4(reservoir.hitPos, 0.0);
     float4 out1 = float4(reservoir.radiance, 0.0);
     float4 out2 = float4(reservoir.w_sum, asfloat(reservoir.M),
-                         reservoir.W, 0.0);
+                         reservoir.W, asfloat(reservoir.escaped));
     if (WavefrontReservoirFlip()) {
         g_gi_reservoir_a0[pixel] = out0;
         g_gi_reservoir_a1[pixel] = out1;
@@ -87,6 +87,74 @@ inline void StoreWavefrontGiReservoir(uint2 pixel, GI_Reservoir reservoir)
         g_gi_reservoir_b1[pixel] = out1;
         g_gi_reservoir_b2[pixel] = out2;
     }
+}
+
+// ---- GI history reuse & seam-leak guard -----------------------------------
+// The ReSTIR GI spatial pass (restir_gi_spatial_cs.hlsl) runs after each
+// wavefront frame and writes the temporally+spatially reused reservoir to the
+// frame's ping-pong side. Primary resolve owns candidate generation, so it
+// reads the OTHER side (last frame's neighborhood-filtered reservoir) and
+// uses it for two things: a temporal-relative firefly guard on the fresh
+// candidate, and temporal reservoir merging (real multi-sample GI instead of
+// 1-sample-per-frame). A deterministic seam leak is invisible to an absolute
+// clamp — history is the only reliable reference, and the spatial pass keeps
+// it sane. Window light is temporally consistent and passes through; light
+// changes catch up within a couple of frames. History is ignored when
+// DLSS-RR is active because the spatial pass does not run in that mode.
+//
+// Escaped (env) candidates get the tight factor: a GI ray that escaped the
+// scene can only be a seam leak at a dark pixel, and real hairline cracks
+// contribute ~nothing. Surface bounces are NOT clamped against history
+// (absolute 1000 cap only) so sunlit floors keep their full color bleeding.
+static const float kGiEscapeHistoryFactor = 2.0f;
+static const float kGiHistoryFloor = 0.02f;
+
+inline GI_Reservoir LoadWavefrontGiReservoirHistory(uint2 pixel)
+{
+    float4 d0, d1, d2;
+    if (WavefrontReservoirFlip()) {
+        d0 = g_gi_reservoir_b0[pixel];
+        d1 = g_gi_reservoir_b1[pixel];
+        d2 = g_gi_reservoir_b2[pixel];
+    } else {
+        d0 = g_gi_reservoir_a0[pixel];
+        d1 = g_gi_reservoir_a1[pixel];
+        d2 = g_gi_reservoir_a2[pixel];
+    }
+    GI_Reservoir r;
+    r.hitPos = d0.xyz;
+    r.radiance = d1.xyz;
+    r.w_sum = d2.x;
+    r.M = asuint(d2.y);
+    r.W = d2.z;
+    r.escaped = asuint(d2.w);
+    if (!all(isfinite(r.hitPos)) || !all(isfinite(r.radiance))) {
+        return init_gi_reservoir();
+    }
+    if (!isfinite(r.w_sum) || r.w_sum < 0.0) r.w_sum = 0.0;
+    if (!isfinite(r.W) || r.W < 0.0) r.W = 0.0;
+    return r;
+}
+
+// Hue-preserving clamp of a fresh candidate against the history radiance.
+// Applied BEFORE the reservoir target/weight bookkeeping so weights always
+// match the stored sample. Empty history => pass through (first frames).
+inline float3 WavefrontGiClampRadianceToHistory(float3 radiance,
+                                                GI_Reservoir history,
+                                                float outlierFactor)
+{
+    if (history.M == 0u || history.W <= 0.0 ||
+        !any(history.radiance > 0.0)) {
+        return radiance;
+    }
+    float histPeak = max(history.radiance.r,
+                         max(history.radiance.g, history.radiance.b));
+    float limit = outlierFactor * max(histPeak, kGiHistoryFloor);
+    float peak = max(radiance.r, max(radiance.g, radiance.b));
+    if (peak > limit && peak > 1.0e-8) {
+        return radiance * (limit / peak);
+    }
+    return radiance;
 }
 
 inline float WavefrontEvaluateReservoirTarget(WavefrontHitRecord record,
@@ -1414,9 +1482,7 @@ inline float3 EvaluateWavefrontGiSurfaceRadiance(
         // as a bright blob. Clamping the sun's contribution at the bounce
         // caps that blowout while keeping the color-bleeding tint. This only
         // touches the sun at bounce surfaces — it does NOT dim window GI.
-        direct += min(sunDirect, float3(kGiSecondarySunClamp,
-                                        kGiSecondarySunClamp,
-                                        kGiSecondarySunClamp));
+        direct += WavefrontClampSecondaryRadiance(sunDirect);
     }
     float3 giLighting = direct;
 
@@ -1463,8 +1529,11 @@ inline float3 EvaluateWavefrontGiSurfaceRadiance(
         (clayMode && !clayPreserveTransparency) ? 0.0 : saturate(coatLayer.w);
     if (translucency > 0.001) {
         float backNdotL = saturate(dot(-normal, sun.direction));
-        giLighting += (diffuseAlbedo / PI) * sun.radiance * backNdotL *
-                      translucency;
+        // Same secondary cap as the front-facing sun term: thin-material
+        // translucency must not pass the full sun radiance through a wall.
+        giLighting += (diffuseAlbedo / PI) *
+                      WavefrontClampSecondaryRadiance(sun.radiance) *
+                      backNdotL * translucency;
     }
 
     return max(emissive + giLighting * ao, 0.0);
@@ -1474,6 +1543,7 @@ inline GI_Reservoir GenerateWavefrontGiCandidate(float3 hitPos,
                                                  float3 normal,
                                                  float3 geomNormal,
                                                  float3 diffuseAlbedo,
+                                                 GI_Reservoir giHistory,
                                                  inout RNG rng)
 {
     GI_Reservoir reservoir = init_gi_reservoir();
@@ -1481,7 +1551,8 @@ inline GI_Reservoir GenerateWavefrontGiCandidate(float3 hitPos,
         return reservoir;
     }
 
-    float3 candidateDir = BuildDiffuseContinuation(normal, rng);
+    float3 candidateDir = ClampDirectionToGeomHemisphere(
+        BuildDiffuseContinuation(normal, rng), geomNormal);
     float NdotL = saturate(dot(normal, candidateDir));
     float pdf = NdotL / PI;
     if (pdf <= 1.0e-6 || NdotL <= 0.0) {
@@ -1500,25 +1571,43 @@ inline GI_Reservoir GenerateWavefrontGiCandidate(float3 hitPos,
 
     float3 radiance = float3(0.0, 0.0, 0.0);
     float3 candidatePos = hitPos + candidateDir * 1000.0;
-    if (query.CommittedStatus() == COMMITTED_NOTHING) {
+    const bool escaped =
+        (query.CommittedStatus() == COMMITTED_NOTHING);
+    if (escaped) {
+        // The escaped environment is capped inside
+        // WavefrontEvaluateIndirectEnvironmentRadiance (raw env, before the
+        // IBL boost), so a GI ray threading a corner hole cannot inject the
+        // full sun disk; sky through real windows is unaffected.
         radiance = WavefrontEvaluateIndirectEnvironmentRadiance(candidateDir,
                                                                 candidatePos);
-        // Cap the escaped environment so a GI ray threading a corner hole
-        // cannot inject the full sun disk; sky through real windows (well
-        // under the clamp) is unaffected. Same value as the sun-at-bounce
-        // clamp in EvaluateWavefrontGiSurfaceRadiance.
-        radiance = min(radiance, float3(kGiSecondarySunClamp,
-                                        kGiSecondarySunClamp,
-                                        kGiSecondarySunClamp));
     } else if (query.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
         radiance = EvaluateWavefrontGiSurfaceRadiance(query, candidateDir,
                                                       candidatePos);
     }
 
+    // Temporal-relative seam-leak guard for escaped rays. A GI ray that
+    // threaded a seam injects huge env radiance at a pixel whose
+    // (neighborhood-filtered) history is dark; clamp BEFORE computing
+    // target/weights so all reservoir bookkeeping stays consistent. The
+    // tight factor converges with the spatial pass's escaped-sample guard,
+    // so leak pixels settle at neighborhood scale instead of ratcheting up.
+    // Surface bounces are not clamped against history (absolute 1000 cap
+    // only) — sunlit floors keep their full color bleeding.
+    if (escaped) {
+        radiance = WavefrontGiClampRadianceToHistory(
+            radiance, giHistory, kGiEscapeHistoryFactor);
+    }
+
     float3 brdf = diffuseAlbedo / PI;
     float pTarget = length(max(radiance * brdf * NdotL, 0.0));
     float risWeight = min(pTarget / max(pdf, 1.0e-5), 1.0e5);
-    update_gi_reservoir(reservoir, candidatePos, radiance, risWeight, rng);
+    update_gi_reservoir(reservoir, candidatePos, radiance, risWeight,
+                        escaped ? 1u : 0u, rng);
+    // Merge last frame's (guarded, spatially reused) reservoir for temporal
+    // reuse. w_sum units match the fresh candidate; merging BEFORE finalize
+    // keeps the original pTarget normalization so display brightness is
+    // unchanged vs. the pre-reuse path.
+    combine_gi_reservoirs(reservoir, giHistory, 1.0, rng);
     finalize_gi_reservoir(reservoir, pTarget);
     return reservoir;
 }
@@ -2130,7 +2219,11 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                     }
                 } else {
                     nextRayType = RAY_TYPE_DIFFUSE;
-                    nextDirection = BuildDiffuseContinuation(normal, rng);
+                    // Keep the diffuse continuation on the geometric
+                    // hemisphere: normal maps on flat arch-viz walls must
+                    // not send rays through the wall into the exterior.
+                    nextDirection = ClampDirectionToGeomHemisphere(
+                        BuildDiffuseContinuation(normal, rng), geomNormal);
                     nextThroughput =
                         state.throughput * saturate(diffuseAlbedo) /
                         max(diffuseProb, 1.0e-4);
@@ -2255,8 +2348,20 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             }
         }
 
+        // Reuse last frame's (spatially filtered) GI reservoir: it is the
+        // reference for the seam-leak guard and the temporal merge partner.
+        // Only valid while accumulation is active (static camera): after a
+        // camera move or scene edit the history belongs to a different
+        // surface, and merging it would inject stale window/sun radiance
+        // into interior pixels. DLSS-RR also disables it (the spatial pass
+        // does not run in that mode).
+        GI_Reservoir giHistory = init_gi_reservoir();
+        if (dlssRayReconstruction <= 0.5 && accumulationCount > 0.0) {
+            giHistory = LoadWavefrontGiReservoirHistory(pixel);
+        }
         giReservoir = GenerateWavefrontGiCandidate(hitPos, normal, geomNormal,
-                                                   diffuseAlbedo, rng);
+                                                   diffuseAlbedo, giHistory,
+                                                   rng);
         color += state.throughput *
                  EvaluateWavefrontGiReservoirContribution(
                      giReservoir, hitPos, normal, diffuseAlbedo);

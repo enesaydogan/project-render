@@ -216,12 +216,12 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
         }
         float3 missRadiance = WavefrontHitRecordGetColor(record);
         if (WavefrontGetPathRayType(state.packedState) == RAY_TYPE_DIFFUSE) {
-            missRadiance *= GetDxrIndirectIblBoost();
-            // Cap escaped diffuse rays so a ray threading a corner hole cannot
-            // inject the full sun disk; sky through real windows is unaffected.
-            missRadiance = min(missRadiance, float3(kGiSecondarySunClamp,
-                                                    kGiSecondarySunClamp,
-                                                    kGiSecondarySunClamp));
+            // Cap the RAW escaped environment BEFORE the IBL boost so a ray
+            // threading a corner hole cannot inject the full sun disk, while
+            // a raised IBL boost can never push real window sky over the cap.
+            missRadiance =
+                WavefrontClampSecondaryRadiance(missRadiance) *
+                GetDxrIndirectIblBoost();
         }
         contribution = max(state.throughput, 0.0) * missRadiance;
         uint previousValue = 0u;
@@ -327,7 +327,11 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                 }
             } else {
                 nextRayType = RAY_TYPE_DIFFUSE;
-                nextDirection = BuildDiffuseContinuation(normal, rng);
+                // Keep the diffuse continuation on the geometric
+                // hemisphere: normal maps on flat arch-viz walls must
+                // not send rays through the wall into the exterior.
+                nextDirection = ClampDirectionToGeomHemisphere(
+                    BuildDiffuseContinuation(normal, rng), geomNormal);
                 nextThroughput =
                     state.throughput * saturate(diffuseAlbedo) /
                     max(diffuseProb, 1.0e-4);
@@ -399,7 +403,7 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             // must not blow out through a corner hole. The primary direct sun
             // stays full; only secondary-ray sun is capped.
             explicitSunSample.radiance =
-                min(explicitSunSample.radiance, kGiSecondarySunClamp);
+                WavefrontClampSecondaryRadiance(explicitSunSample.radiance);
         }
         uint bounceDepth = WavefrontGetSpecularBounceCount(state.packedState) +
                            WavefrontGetRefractiveBounceCount(state.packedState) +
